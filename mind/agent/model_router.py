@@ -1,23 +1,47 @@
 """ModelRouter unificado + retry com backoff.
 
-Uma única classe abstrai a chamada a modelos locais (Ollama) e em nuvem
-(provedor compatível com OpenAI, ex: HuggingFace). O método `generate`
-funciona identicamente em ambos os modos — o resto do sistema nunca sabe
-qual modo está activo.
+Uma única classe abstrai a chamada a modelos, seja qual for a forma como
+estão a ser servidos. O método `generate` funciona identicamente em todos os
+modos — o resto do sistema nunca sabe qual está activo.
 
-Cada um dos 8 componentes (CORTEX, CEREBELLUM, NEURON 1-6) tem endpoint e
-modelo configuráveis de forma independente.
+Cada um dos 8 componentes (CORTEX, CEREBELLUM, NEURON 1-6) tem endpoint,
+modelo e token configuráveis de forma independente.
+
+--------------------------------------------------------------------------
+MODOS (MODEL_MODE)
+--------------------------------------------------------------------------
+  openai_compat  Servidor compatível com a API da OpenAI (vLLM, TGI,
+                 llama.cpp server). É o modo por omissão e o recomendado
+                 para GPU alugada: o servidor gere a GPU, o MIND só fala
+                 HTTP. Suporta modelos do HuggingFace Hub e adaptadores
+                 LoRA servidos como modelos distintos.
+  hf_local       transformers em processo. Usar quando o MIND corre NA
+                 própria máquina da GPU. Aceita IDs do Hub e caminhos de
+                 disco (checkpoints afinados). Importação preguiçosa: o
+                 torch só é carregado se este modo for usado.
+  hf_api         HuggingFace Inference API / Inference Endpoints (remoto).
+  ollama         Mantido para compatibilidade com instalações locais.
+
+--------------------------------------------------------------------------
+NOTA DE SEGURANÇA — GPU alugada
+--------------------------------------------------------------------------
+Quando os modelos correm em GPU alugada (vast.ai e afins), os prompts e o
+código gerado saem do hardware do utilizador. O princípio "tudo local" da
+SYNAPSE DB mantém-se — a base de dados nunca sai — mas a inferência deixa
+de ser local, e isso é uma cedência consciente, não um descuido.
+
+Mitigações previstas no código: token por componente (MODEL_AUTH_TOKEN ou
+NEURON_N_TOKEN), verificação de TLS activa por omissão, e recomendação de
+túnel (SSH/WireGuard) para endpoints sem HTTPS. Ver
+docs/decisoes/gpu_alugada.md.
 
 --------------------------------------------------------------------------
 Decisão explícita sobre Redis
 --------------------------------------------------------------------------
-Redis NÃO é usado nesta fase. Se os NEURONS correm numa única GPU local,
-uma fila de mensagens não traz paralelismo real algum. Fica aqui
-documentado como caminho de migração futuro (múltiplas GPUs/máquinas),
-não como necessidade actual. A comunicação CORTEX->NEURONS usa
-asyncio.gather() (ver agent/graph.py); se os endpoints suportarem
-concorrência real, o paralelismo é real; se partilharem GPU, a fila é
-natural, sem custo extra de infraestrutura.
+Redis NÃO é usado nesta fase. Com um único servidor de inferência, uma fila
+de mensagens não traz paralelismo real. Fica documentado como caminho de
+migração futuro (vários servidores/GPUs), não como necessidade actual. A
+comunicação CORTEX->NEURONS usa asyncio.gather() (ver agent/graph.py).
 """
 
 import os
@@ -25,6 +49,13 @@ import time
 from typing import Optional
 
 import httpx
+
+MODOS = ("openai_compat", "hf_local", "hf_api", "ollama")
+
+# Modelos carregados em processo no modo hf_local, reutilizados entre
+# chamadas. Numa GPU só cabem alguns em simultâneo — ver docstring de
+# _call_hf_local.
+_PIPELINES: dict = {}
 
 
 class ModelError(Exception):
@@ -41,13 +72,15 @@ def call_model_with_retry(
     model: str,
     prompt: str,
     system: str = "",
-    mode: str = "local",
+    mode: str = "openai_compat",
     api_key: str = "",
     timeout: float = 120.0,
     max_retries: int = 3,
     backoff: int = 2,
     db=None,
     component: str = "unknown",
+    cycle_id: Optional[int] = None,
+    iteration: int = 0,
 ) -> str:
     """Tenta a chamada ao modelo com retry e backoff exponencial.
 
@@ -57,20 +90,22 @@ def call_model_with_retry(
     estruturado e regista-o na SYNAPSE DB.
 
     Complementa (não substitui) o circuit breaker por NEURON: o circuit
-    breaker limita quanto tempo se espera por UM NEURON no total dentro
-    do asyncio.gather(); o retry aumenta a probabilidade dessa chamada
+    breaker limita quanto tempo se espera por UM NEURON no total dentro do
+    asyncio.gather(); o retry aumenta a probabilidade dessa chamada
     individual ter sucesso antes do circuit breaker cortar.
+
+    O retry é particularmente relevante com GPU alugada: instâncias podem
+    ser reiniciadas ou ficar momentaneamente indisponíveis, e uma falha de
+    rede transitória não deve reprovar um ciclo.
     """
     last_error = ""
     wait = backoff
     for attempt in range(1, max_retries + 1):
         try:
-            if mode == "api":
-                return _call_openai_compatible(
-                    endpoint, model, prompt, system, api_key, timeout
-                )
-            return _call_ollama(endpoint, model, prompt, system, timeout)
-        except (httpx.HTTPStatusError, httpx.RequestError, httpx.TimeoutException) as exc:
+            return _despachar(mode, endpoint, model, prompt, system,
+                              api_key, timeout)
+        except (httpx.HTTPStatusError, httpx.RequestError,
+                httpx.TimeoutException) as exc:
             # Só faz retry em erros transitórios (5xx / conexão / timeout).
             status = getattr(getattr(exc, "response", None), "status_code", None)
             if status is not None and status < 500 and status != 429:
@@ -80,13 +115,22 @@ def call_model_with_retry(
             if attempt < max_retries:
                 time.sleep(wait)
                 wait *= 2  # 2s -> 4s -> 8s
+        except RuntimeError as exc:
+            # Falhas locais (modelo não carrega, sem memória de GPU) não são
+            # transitórias: repetir só desperdiça tempo.
+            last_error = str(exc)
+            break
 
     # Todas as tentativas falharam: erro estruturado + registo na SYNAPSE DB.
-    if db is not None:
+    # O cycle_id tem de ser o real: a tabela iterations tem foreign key para
+    # cycles, e um valor inventado faria o registo falhar em silêncio — foi
+    # exactamente o que acontecia antes, deixando as falhas de modelo sem
+    # rasto nenhum.
+    if db is not None and cycle_id:
         try:
             db.log_iteration(
-                cycle_id=0,
-                iteration_number=0,
+                cycle_id=cycle_id,
+                iteration_number=iteration,
                 phase="model_call",
                 component=component,
                 input_summary=prompt[:200],
@@ -95,35 +139,34 @@ def call_model_with_retry(
             )
         except Exception:
             pass  # nunca deixar o logging derrubar a chamada
-    raise ModelError(component, f"Todas as {max_retries} tentativas falharam: {last_error}")
+    raise ModelError(
+        component, f"Todas as {max_retries} tentativas falharam: {last_error}"
+    )
 
 
-def _call_ollama(
-    endpoint: str, model: str, prompt: str, system: str, timeout: float
-) -> str:
-    """Chama a API generate do Ollama."""
-    url = endpoint.rstrip("/") + "/api/generate"
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "system": system,
-        "stream": False,
-    }
-    resp = httpx.post(url, json=payload, timeout=timeout)
-    resp.raise_for_status()
-    data = resp.json()
-    return data.get("response", "")
+def _despachar(mode, endpoint, model, prompt, system, api_key, timeout) -> str:
+    """Encaminha para o runner do modo activo."""
+    if mode == "hf_local":
+        return _call_hf_local(model, prompt, system, timeout)
+    if mode == "hf_api":
+        return _call_hf_api(endpoint, model, prompt, system, api_key, timeout)
+    if mode == "ollama":
+        return _call_ollama(endpoint, model, prompt, system, timeout)
+    # openai_compat é o modo por omissão (vLLM, TGI, llama.cpp server).
+    return _call_openai_compatible(endpoint, model, prompt, system,
+                                   api_key, timeout)
 
 
 def _call_openai_compatible(
-    endpoint: str,
-    model: str,
-    prompt: str,
-    system: str,
-    api_key: str,
-    timeout: float,
+    endpoint: str, model: str, prompt: str, system: str,
+    api_key: str, timeout: float,
 ) -> str:
-    """Chama um endpoint compatível com a API chat/completions da OpenAI."""
+    """Chama um endpoint compatível com a API chat/completions da OpenAI.
+
+    Serve vLLM, Text Generation Inference e llama.cpp server. É o caminho
+    recomendado para GPU alugada: o servidor trata da memória e do batching,
+    e adaptadores LoRA podem ser expostos como nomes de modelo distintos.
+    """
     url = endpoint.rstrip("/") + "/v1/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -139,20 +182,103 @@ def _call_openai_compatible(
     return data["choices"][0]["message"]["content"]
 
 
+def _call_hf_api(
+    endpoint: str, model: str, prompt: str, system: str,
+    api_key: str, timeout: float,
+) -> str:
+    """Chama a Inference API da HuggingFace (ou um Inference Endpoint).
+
+    Se `endpoint` apontar para um Inference Endpoint dedicado, usa-o; caso
+    contrário monta o URL público a partir do id do modelo.
+    """
+    base = (endpoint or "").rstrip("/")
+    if not base or "huggingface.co" not in base:
+        base = f"https://api-inference.huggingface.co/models/{model}"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    entrada = f"{system}\n\n{prompt}" if system else prompt
+    payload = {"inputs": entrada, "parameters": {"return_full_text": False}}
+    resp = httpx.post(base, json=payload, headers=headers, timeout=timeout)
+    resp.raise_for_status()
+    data = resp.json()
+    if isinstance(data, list) and data:
+        return data[0].get("generated_text", "")
+    if isinstance(data, dict):
+        return data.get("generated_text", "")
+    return ""
+
+
+def _call_hf_local(model: str, prompt: str, system: str, timeout: float) -> str:
+    """Corre um modelo HuggingFace em processo, via transformers.
+
+    `model` pode ser um id do Hub ("Qwen/Qwen2.5-Coder-7B-Instruct") ou um
+    caminho de disco para um checkpoint afinado — o transformers aceita os
+    dois indistintamente, o que é o que permite servir modelos retreinados
+    sem código especial.
+
+    Aviso de memória: os 8 componentes do MIND não cabem simultaneamente
+    numa só GPU se forem modelos grandes distintos. Os pipelines ficam em
+    cache e são reutilizados; libertar memória entre componentes exigiria
+    descarregar e recarregar, que é lento. Para várias variantes afinadas do
+    mesmo modelo base, servir adaptadores LoRA por um servidor
+    (modo openai_compat) é bastante mais eficiente do que este modo.
+
+    O torch/transformers é importado preguiçosamente: quem não usar este
+    modo não precisa de os ter instalados.
+    """
+    pipe = _PIPELINES.get(model)
+    if pipe is None:
+        try:
+            from transformers import pipeline
+        except ImportError as exc:
+            raise RuntimeError(
+                "modo hf_local exige transformers e torch instalados "
+                f"(pip install -r requirements-hf.txt): {exc}"
+            ) from exc
+        try:
+            pipe = pipeline("text-generation", model=model,
+                            device_map="auto")
+        except Exception as exc:
+            raise RuntimeError(f"não foi possível carregar '{model}': {exc}") from exc
+        _PIPELINES[model] = pipe
+
+    entrada = f"{system}\n\n{prompt}" if system else prompt
+    try:
+        saida = pipe(entrada, max_new_tokens=1024, return_full_text=False)
+    except Exception as exc:
+        raise RuntimeError(f"falha na inferência de '{model}': {exc}") from exc
+    if isinstance(saida, list) and saida:
+        return saida[0].get("generated_text", "")
+    return ""
+
+
+def _call_ollama(
+    endpoint: str, model: str, prompt: str, system: str, timeout: float
+) -> str:
+    """Chama a API generate do Ollama (mantido para compatibilidade)."""
+    url = endpoint.rstrip("/") + "/api/generate"
+    payload = {"model": model, "prompt": prompt, "system": system,
+               "stream": False}
+    resp = httpx.post(url, json=payload, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json().get("response", "")
+
+
 class ModelRouter:
-    """Lê MODEL_MODE do .env ('local' ou 'api').
+    """Lê MODEL_MODE do .env e abstrai a chamada ao modelo.
 
-    Se local: chama Ollama via endpoint configurado por componente.
-    Se api: chama o provedor configurado (HuggingFace ou outro compatível
-    com OpenAI).
-
+    Modos suportados: openai_compat (omissão), hf_local, hf_api e ollama.
     O método generate(prompt, model, endpoint) funciona identicamente em
-    ambos os modos — o resto do sistema nunca sabe qual modo está activo.
+    todos — o resto do sistema nunca sabe qual está activo.
     """
 
     def __init__(self, db=None):
-        self.mode = os.getenv("MODEL_MODE", "local")
-        self.api_key = os.getenv("HUGGINGFACE_API_KEY", "")
+        self.mode = os.getenv("MODEL_MODE", "openai_compat").strip().lower()
+        if self.mode not in MODOS:
+            # Modo desconhecido não pode falhar em silêncio nem rebentar o
+            # ciclo: cai no modo por omissão e fica registado.
+            self.mode = "openai_compat"
         self.max_retries = int(os.getenv("MODEL_MAX_RETRIES", "3"))
         self.backoff = int(os.getenv("MODEL_RETRY_BACKOFF_SECONDS", "2"))
         self.db = db
@@ -165,6 +291,8 @@ class ModelRouter:
         system: str = "",
         component: str = "unknown",
         timeout: float = 120.0,
+        cycle_id: Optional[int] = None,
+        iteration: int = 0,
     ) -> str:
         """Gera texto a partir do modelo, com retry+backoff transparente."""
         return call_model_with_retry(
@@ -173,12 +301,14 @@ class ModelRouter:
             prompt=prompt,
             system=system,
             mode=self.mode,
-            api_key=self.api_key,
+            api_key=token_do_componente(component),
             timeout=timeout,
             max_retries=self.max_retries,
             backoff=self.backoff,
             db=self.db,
             component=component,
+            cycle_id=cycle_id,
+            iteration=iteration,
         )
 
     async def agenerate(
@@ -189,6 +319,8 @@ class ModelRouter:
         system: str = "",
         component: str = "unknown",
         timeout: float = 120.0,
+        cycle_id: Optional[int] = None,
+        iteration: int = 0,
     ) -> str:
         """Versão assíncrona — corre a chamada síncrona numa thread.
 
@@ -198,33 +330,60 @@ class ModelRouter:
         import asyncio
 
         return await asyncio.to_thread(
-            self.generate, prompt, model, endpoint, system, component, timeout
+            self.generate, prompt, model, endpoint, system, component,
+            timeout, cycle_id, iteration,
         )
+
+
+def token_do_componente(component: str) -> str:
+    """Token de autenticação de um componente.
+
+    Precedência: token específico do componente, depois o global. Ter um
+    token por componente permite apontar componentes diferentes para
+    servidores diferentes — por exemplo, o CORTEX numa GPU alugada maior e
+    os NEURONS noutra mais barata.
+    """
+    if component and component.startswith("neuron_"):
+        n = component.split("_")[-1]
+        especifico = os.getenv(f"NEURON_{n}_TOKEN", "")
+    elif component in ("cortex", "cerebellum"):
+        especifico = os.getenv(f"{component.upper()}_TOKEN", "")
+    else:
+        especifico = ""
+    return (
+        especifico
+        or os.getenv("MODEL_AUTH_TOKEN", "")
+        or os.getenv("HUGGINGFACE_API_KEY", "")
+    )
 
 
 def component_config(component: str) -> tuple[str, str, bool]:
     """Lê endpoint, modelo e flag de existência de um componente do .env.
 
     `component` é 'cortex', 'cerebellum' ou 'neuron_N'. Devolve
-    (endpoint, model, enabled). Para NEURONS, `enabled` reflecte
-    ENABLE_NEURON_N (existência no sistema — não activação por ronda).
-    Para CORTEX/CEREBELLUM `enabled` é sempre True.
+    (endpoint, model, enabled). O modelo pode ser um id do HuggingFace Hub,
+    o nome de um adaptador LoRA servido, ou um caminho de disco para um
+    checkpoint afinado — o router trata os três da mesma maneira.
+
+    Para NEURONS, `enabled` reflecte ENABLE_NEURON_N (existência no sistema
+    — não activação por ronda). Para CORTEX/CEREBELLUM é sempre True.
     """
+    omissao = os.getenv("MODEL_ENDPOINT", "http://localhost:8000")
     if component == "cortex":
         return (
-            os.getenv("CORTEX_ENDPOINT", "http://localhost:11434"),
+            os.getenv("CORTEX_ENDPOINT", omissao),
             os.getenv("CORTEX_MODEL", ""),
             True,
         )
     if component == "cerebellum":
         return (
-            os.getenv("CEREBELLUM_ENDPOINT", "http://localhost:11434"),
+            os.getenv("CEREBELLUM_ENDPOINT", omissao),
             os.getenv("CEREBELLUM_MODEL", ""),
             True,
         )
     # neuron_N
     n = component.split("_")[-1]
-    endpoint = os.getenv(f"NEURON_{n}_ENDPOINT", "http://localhost:11434")
+    endpoint = os.getenv(f"NEURON_{n}_ENDPOINT", omissao)
     model = os.getenv(f"NEURON_{n}_MODEL", "")
     enabled = os.getenv(f"ENABLE_NEURON_{n}", "true").lower() == "true"
     return endpoint, model, enabled

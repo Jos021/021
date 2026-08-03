@@ -22,6 +22,27 @@ estar documentada nesta página.
      fine-tuning futuro** quando houver dados suficientes na SYNAPSE DB
      (exportáveis via `python main.py export`).
 
+## Contexto de execução (decidido)
+
+Os modelos são **todos do HuggingFace**, alguns **retreinados**, e correm em
+**GPU alugada na cloud** (vast.ai e semelhantes). Ver
+`docs/decisoes/gpu_alugada.md` para os modos de serviço, a nota de segurança
+e a recomendação de usar adaptadores LoRA em vez de checkpoints completos.
+
+Consequências para a escolha de modelo:
+
+- **A licença tem de permitir uso comercial E execução em hardware alugado
+  de terceiros.** Algumas licenças restringem onde os pesos podem correr.
+- **O tamanho é limitado pela GPU que se aluga**, não por hardware próprio —
+  o critério passa a ser custo/hora versus qualidade, e não "cabe ou não
+  cabe".
+- **Preferir modelos com o mesmo base entre componentes** sempre que possível:
+  permite servir variantes afinadas como adaptadores LoRA sobre um só modelo
+  carregado, em vez de pagar memória por cada um.
+- **Verificar se o modelo respeita instruções de formato** (o esquema JSON dos
+  relatórios). É um critério prático que só se mede em teste-piloto, e a
+  SYNAPSE DB regista cada desvio automaticamente.
+
 ## Princípio de dimensionamento
 
 Os modelos **não** são todos do mesmo tamanho por padrão — cada componente
@@ -52,6 +73,8 @@ alimentar treino externo, por decisão explícita do operador.
 - Idioma / formato:
 - Comunidade:
 - Resultado do teste-piloto (5-10 tarefas):
+- Respeita o esquema JSON dos relatórios? (% de respostas válidas):
+- Modelo base (para partilha de LoRA entre componentes):
 - **Decisão:**
 - Candidato a fine-tuning futuro? (sim/não):
 
@@ -64,6 +87,8 @@ alimentar treino externo, por decisão explícita do operador.
 - Idioma / formato:
 - Comunidade:
 - Resultado do teste-piloto (5-10 tarefas):
+- Respeita o esquema JSON dos relatórios? (% de respostas válidas):
+- Modelo base (para partilha de LoRA entre componentes):
 - **Decisão:**
 - Candidato a fine-tuning futuro? (sim/não):
 
@@ -76,6 +101,8 @@ alimentar treino externo, por decisão explícita do operador.
 - Idioma / formato:
 - Comunidade:
 - Resultado do teste-piloto (5-10 tarefas):
+- Respeita o esquema JSON dos relatórios? (% de respostas válidas):
+- Modelo base (para partilha de LoRA entre componentes):
 - **Decisão:**
 - Candidato a fine-tuning futuro? (sim/não):
 
@@ -88,6 +115,8 @@ alimentar treino externo, por decisão explícita do operador.
 - Idioma / formato:
 - Comunidade:
 - Resultado do teste-piloto (5-10 tarefas):
+- Respeita o esquema JSON dos relatórios? (% de respostas válidas):
+- Modelo base (para partilha de LoRA entre componentes):
 - **Decisão:**
 - Candidato a fine-tuning futuro? (sim/não):
 
@@ -100,6 +129,8 @@ alimentar treino externo, por decisão explícita do operador.
 - Idioma / formato:
 - Comunidade:
 - Resultado do teste-piloto (5-10 tarefas):
+- Respeita o esquema JSON dos relatórios? (% de respostas válidas):
+- Modelo base (para partilha de LoRA entre componentes):
 - **Decisão:**
 - Candidato a fine-tuning futuro? (sim/não):
 
@@ -112,6 +143,8 @@ alimentar treino externo, por decisão explícita do operador.
 - Idioma / formato:
 - Comunidade:
 - Resultado do teste-piloto (5-10 tarefas):
+- Respeita o esquema JSON dos relatórios? (% de respostas válidas):
+- Modelo base (para partilha de LoRA entre componentes):
 - **Decisão:**
 - Candidato a fine-tuning futuro? (sim/não):
 
@@ -124,6 +157,8 @@ alimentar treino externo, por decisão explícita do operador.
 - Idioma / formato:
 - Comunidade:
 - Resultado do teste-piloto (5-10 tarefas):
+- Respeita o esquema JSON dos relatórios? (% de respostas válidas):
+- Modelo base (para partilha de LoRA entre componentes):
 - **Decisão:**
 - Candidato a fine-tuning futuro? (sim/não):
 
@@ -136,5 +171,7 @@ alimentar treino externo, por decisão explícita do operador.
 - Idioma / formato:
 - Comunidade:
 - Resultado do teste-piloto (5-10 tarefas):
+- Respeita o esquema JSON dos relatórios? (% de respostas válidas):
+- Modelo base (para partilha de LoRA entre componentes):
 - **Decisão:**
 - Candidato a fine-tuning futuro? (sim/não):

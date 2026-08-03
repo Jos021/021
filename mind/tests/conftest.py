@@ -81,7 +81,7 @@ class RouterFalso:
         )
 
     def generate(self, prompt, model, endpoint, system="", component="",
-                 timeout=120):
+                 timeout=120, cycle_id=None, iteration=0):
         self.chamadas.append(component)
         if component in self.respostas:
             resposta = self.respostas[component]
@@ -111,7 +111,7 @@ class RouterFalso:
         })
 
     async def agenerate(self, prompt, model, endpoint, system="",
-                        component="", timeout=120):
+                        component="", timeout=120, cycle_id=None, iteration=0):
         self.chamadas_async.append(component)
         n = component.split("_")[-1]
         return f"# [NEURON_{n}:python]\n{self.codigo_neuron}"

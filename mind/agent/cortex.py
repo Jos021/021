@@ -169,7 +169,8 @@ class Cortex:
         )
 
     # --- Utilitário de geração -------------------------------------------
-    def _generate(self, prompt: str, timeout: float = 120.0) -> str:
+    def _generate(self, prompt: str, timeout: float = 120.0,
+                  state: dict = None) -> str:
         """Gera texto com a persona JARVIS. Degrada com aviso se sem modelo."""
         if not self.model:
             # Sem modelo configurado (campos _MODEL vazios por defeito).
@@ -184,6 +185,8 @@ class Cortex:
                 system=self.system,
                 component="cortex",
                 timeout=timeout,
+                cycle_id=(state or {}).get("cycle_id"),
+                iteration=(state or {}).get("iteration", 0),
             )
         except ModelError as exc:
             return f"[CORTEX_ERRO] {exc.message}"
@@ -206,7 +209,7 @@ class Cortex:
             "inicial. Responde em duas secções separadas por '===CODIGO==='."
             + self._hippocampus_hint(state)
         )
-        out = self._generate(prompt)
+        out = self._generate(prompt, state=state)
         if "===CODIGO===" in out:
             logic, code = out.split("===CODIGO===", 1)
         else:
@@ -233,7 +236,7 @@ class Cortex:
             "o código base aprimorado."
             + self._hippocampus_hint(state)
         )
-        out = self._generate(prompt)
+        out = self._generate(prompt, state=state)
         if out and not out.startswith("[CORTEX_ERRO]"):
             state["base_code"] = out.strip()
         self.db.log_iteration(
@@ -262,7 +265,7 @@ class Cortex:
                 f"NEURONS disponíveis: {', '.join(enabled)}. "
                 "Devolve só o código anotado."
             )
-            out = self._generate(prompt)
+            out = self._generate(prompt, state=state)
             if out and not out.startswith("[CORTEX_ERRO]"):
                 code = out.strip()
                 state["base_code"] = code
@@ -501,7 +504,7 @@ class Cortex:
             "Gera a TUA avaliação independente: percentagem de funcionalidade, "
             "falhas encontradas e melhorias necessárias.\n\n" + INSTRUCAO_JSON
         )
-        out = self._generate(prompt)
+        out = self._generate(prompt, state=state)
         state["cortex_test_report"] = out
         pct = parse_relatorio(out).functionality_pct
         self.db.log_report(

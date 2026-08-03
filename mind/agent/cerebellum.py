@@ -65,7 +65,8 @@ class Cerebellum:
         )
         return self.hippocampus.consult("cerebellum", features)
 
-    def _generate(self, prompt: str, timeout: float = 120.0) -> str:
+    def _generate(self, prompt: str, timeout: float = 120.0,
+                  state: dict = None) -> str:
         if not self.model:
             return ""
         try:
@@ -76,6 +77,8 @@ class Cerebellum:
                 system=self.system,
                 component="cerebellum",
                 timeout=timeout,
+                cycle_id=(state or {}).get("cycle_id"),
+                iteration=(state or {}).get("iteration", 0),
             )
         except ModelError as exc:
             return f"[CEREBELLUM_ERRO] {exc.message}"
@@ -96,7 +99,7 @@ class Cerebellum:
             "Avalia lógica, sintaxe e código base. Aponta problemas e "
             "melhorias concretas. Output estruturado."
         )
-        out = self._generate(prompt)
+        out = self._generate(prompt, state=state)
         state["cerebellum_feedback_f1"] = out
         self.db.log_iteration(
             state["cycle_id"], state["iteration"], "1", "cerebellum",
@@ -131,7 +134,7 @@ class Cerebellum:
             "coerência lógica e cobertura funcional. Output estruturado."
             + hint
         )
-        out = self._generate(prompt)
+        out = self._generate(prompt, state=state)
         self.db.log_iteration(
             state["cycle_id"], state["iteration"], "2", "cerebellum",
             input_summary="auditar código", output_summary="auditoria",
@@ -186,7 +189,7 @@ class Cerebellum:
             "falhas encontradas, e melhorias atribuídas a NEURONS ESPECÍFICOS "
             "(nunca genéricas).\n\n" + INSTRUCAO_JSON
         )
-        cere_report = self._generate(prompt)
+        cere_report = self._generate(prompt, state=state)
         state["cerebellum_report"] = cere_report
 
         avaliacao = parse_relatorio(cere_report)
@@ -214,12 +217,13 @@ class Cerebellum:
             self._log(
                 f"Divergência {divergence:.1f}pp — 3ª ronda de verificação."
             )
-            third = self._generate(
+            prompt_terceira = (
                 "Terceira verificação. Reconcilia as duas estimativas "
                 f"({pct_cortex} vs {pct_cere}) a partir dos resultados dos "
                 "testes.\n\n" + state.get("test_results", "") + "\n\n"
                 + INSTRUCAO_JSON
             )
+            third = self._generate(prompt_terceira, state=state)
             reconciliacao = parse_relatorio(third)
             pct_third = reconciliacao.functionality_pct
             final_pct = pct_third if pct_third > 0 else (pct_cortex + pct_cere) / 2

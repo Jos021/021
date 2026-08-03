@@ -1,0 +1,17 @@
+# ==========================================================================
+# Requirements adicionais — modo hf_local (transformers em processo)
+# ==========================================================================
+# Só necessários com MODEL_MODE=hf_local, ou seja, quando o MIND corre NA
+# própria máquina da GPU e carrega os modelos em processo.
+#
+# Com MODEL_MODE=openai_compat (o recomendado para GPU alugada) NADA disto
+# é preciso do lado do MIND: o servidor de inferência é que tem o torch, e
+# o MIND só fala HTTP. É também a razão pela qual estes pacotes não estão
+# no requirements.txt — arrastariam o torch para quem não precisa dele.
+#
+# Instalação: pip install -r requirements-hf.txt
+
+transformers>=4.44.0
+torch>=2.4.0
+accelerate>=0.34.0
+huggingface-hub>=0.25.0

@@ -75,6 +75,8 @@ class Neuron:
                 system=NEURON_SYSTEM,
                 component=self.neuron_id,
                 timeout=timeout,
+                cycle_id=state.get("cycle_id"),
+                iteration=state.get("iteration", 0),
             )
         except ModelError as exc:
             out = f"[NEURON_ERRO] {exc.message}"

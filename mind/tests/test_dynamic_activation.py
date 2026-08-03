@@ -103,7 +103,8 @@ def test_circuit_breaker_corta_neuron_lento(db, cycle_id, com_modelos):
 
     class RouterLento:
         async def agenerate(self, prompt, model, endpoint, system="",
-                            component="", timeout=120):
+                            component="", timeout=120, cycle_id=None,
+                            iteration=0):
             if component == "neuron_1":
                 await asyncio.sleep(5)
             return f"# [NEURON_{component.split('_')[-1]}]\npass"
