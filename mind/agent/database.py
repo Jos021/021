@@ -61,6 +61,42 @@ CREATE TABLE IF NOT EXISTS decisions (
 );
 """
 
+# --- Schema da extensão HIPPOCAMPUS (camada de apoio de ML) ---------------
+# Criado sempre, mesmo com ML_ENABLED=false — ter as tabelas vazias não custa
+# nada e permite acumular histórico assim que a camada for activada.
+ML_SCHEMA = """
+CREATE TABLE IF NOT EXISTS ml_training_data (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    consumer TEXT NOT NULL,          -- 'cortex' ou 'cerebellum'
+    cycle_id INTEGER,
+    features TEXT NOT NULL,          -- JSON
+    label REAL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (cycle_id) REFERENCES cycles(id)
+);
+
+CREATE TABLE IF NOT EXISTS ml_model_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    consumer TEXT NOT NULL,
+    model_path TEXT NOT NULL,
+    validation_metric REAL,
+    trained_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    is_active BOOLEAN DEFAULT 0,
+    training_samples_count INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS ml_predictions_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle_id INTEGER NOT NULL,
+    iteration_number INTEGER NOT NULL,
+    consumer TEXT NOT NULL,
+    prediction REAL,
+    llm_final_decision TEXT,         -- mede concordância ML vs LLM
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (cycle_id) REFERENCES cycles(id)
+);
+"""
+
 
 class SynapseDB:
     """Camada de acesso à SYNAPSE DB.
@@ -85,6 +121,7 @@ class SynapseDB:
             self._conn.execute("PRAGMA journal_mode=WAL;")
             self._conn.execute("PRAGMA foreign_keys=ON;")
             self._conn.executescript(SCHEMA)
+            self._conn.executescript(ML_SCHEMA)
             self._conn.commit()
 
     # --- Ciclos -----------------------------------------------------------
@@ -244,6 +281,167 @@ class SynapseDB:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
                 count += 1
         return count
+
+    # ======================================================================
+    # HIPPOCAMPUS — camada de apoio de ML
+    # ======================================================================
+    def record_ml_sample(
+        self,
+        consumer: str,
+        cycle_id: Optional[int],
+        features: dict,
+        label: Optional[float],
+    ) -> int:
+        """Guarda uma amostra de treino (features JSON + label).
+
+        Acumula histórico operacional mesmo com ML_ENABLED=false — é este
+        volume que, mais tarde, permite treinar o HIPPOCAMPUS.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                """INSERT INTO ml_training_data
+                   (consumer, cycle_id, features, label)
+                   VALUES (?, ?, ?, ?)""",
+                (consumer, cycle_id, json.dumps(features, ensure_ascii=False), label),
+            )
+            self._conn.commit()
+            return cur.lastrowid
+
+    def count_ml_samples(self, consumer: str, labelled_only: bool = True) -> int:
+        """Conta amostras disponíveis para um consumidor."""
+        query = "SELECT COUNT(*) AS n FROM ml_training_data WHERE consumer = ?"
+        if labelled_only:
+            query += " AND label IS NOT NULL"
+        with self._lock:
+            row = self._conn.execute(query, (consumer,)).fetchone()
+            return row["n"] if row else 0
+
+    def get_ml_samples(self, consumer: str, labelled_only: bool = True) -> list:
+        """Devolve as amostras de treino de um consumidor."""
+        query = "SELECT * FROM ml_training_data WHERE consumer = ?"
+        if labelled_only:
+            query += " AND label IS NOT NULL"
+        query += " ORDER BY id"
+        with self._lock:
+            rows = self._conn.execute(query, (consumer,)).fetchall()
+        out = []
+        for row in rows:
+            try:
+                features = json.loads(row["features"])
+            except (ValueError, TypeError):
+                continue
+            out.append(
+                {
+                    "id": row["id"],
+                    "cycle_id": row["cycle_id"],
+                    "features": features,
+                    "label": row["label"],
+                    "created_at": row["created_at"],
+                }
+            )
+        return out
+
+    def register_ml_model(
+        self,
+        consumer: str,
+        model_path: str,
+        validation_metric: float,
+        training_samples_count: int,
+        activate: bool = False,
+    ) -> int:
+        """Regista uma versão de modelo treinado.
+
+        Se `activate` for True, desactiva as versões anteriores desse
+        consumidor — a promoção é sempre por comparação explícita, feita
+        pelo ml_pipeline, nunca por omissão.
+        """
+        with self._lock:
+            if activate:
+                self._conn.execute(
+                    "UPDATE ml_model_versions SET is_active = 0 WHERE consumer = ?",
+                    (consumer,),
+                )
+            cur = self._conn.execute(
+                """INSERT INTO ml_model_versions
+                   (consumer, model_path, validation_metric,
+                    is_active, training_samples_count)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (consumer, model_path, validation_metric,
+                 1 if activate else 0, training_samples_count),
+            )
+            self._conn.commit()
+            return cur.lastrowid
+
+    def get_active_ml_model(self, consumer: str) -> Optional[dict]:
+        """Devolve o modelo activo de um consumidor, ou None (cold start)."""
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT * FROM ml_model_versions
+                   WHERE consumer = ? AND is_active = 1
+                   ORDER BY id DESC LIMIT 1""",
+                (consumer,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_ml_models(self, consumer: Optional[str] = None) -> list:
+        """Lista as versões de modelo registadas (para o comando ml-status)."""
+        query = "SELECT * FROM ml_model_versions"
+        params: list = []
+        if consumer:
+            query += " WHERE consumer = ?"
+            params.append(consumer)
+        query += " ORDER BY consumer, id DESC"
+        with self._lock:
+            rows = self._conn.execute(query, params).fetchall()
+            return [dict(r) for r in rows]
+
+    def log_ml_prediction(
+        self,
+        cycle_id: int,
+        iteration_number: int,
+        consumer: str,
+        prediction: Optional[float],
+        llm_final_decision: str = "",
+    ) -> int:
+        """Regista uma previsão do HIPPOCAMPUS e a decisão final do LLM.
+
+        Permite medir a concordância ML vs LLM ao longo do tempo — base para
+        ML_RETRAIN_DEVIATION_THRESHOLD.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                """INSERT INTO ml_predictions_log
+                   (cycle_id, iteration_number, consumer, prediction,
+                    llm_final_decision)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (cycle_id, iteration_number, consumer, prediction,
+                 llm_final_decision),
+            )
+            self._conn.commit()
+            return cur.lastrowid
+
+    def ml_prediction_deviation(self, consumer: str, limit: int = 50) -> Optional[float]:
+        """Desvio médio (em pontos) entre previsão do ML e decisão do LLM.
+
+        Usa as últimas `limit` previsões cuja decisão do LLM foi registada
+        como valor numérico. Devolve None se não houver dados comparáveis.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT prediction, llm_final_decision
+                   FROM ml_predictions_log
+                   WHERE consumer = ? AND prediction IS NOT NULL
+                   ORDER BY id DESC LIMIT ?""",
+                (consumer, limit),
+            ).fetchall()
+        deltas = []
+        for row in rows:
+            try:
+                actual = float(row["llm_final_decision"])
+            except (TypeError, ValueError):
+                continue
+            deltas.append(abs(float(row["prediction"]) - actual))
+        return sum(deltas) / len(deltas) if deltas else None
 
     def close(self) -> None:
         with self._lock:

@@ -74,13 +74,51 @@ def extract_section(code: str, neuron_id: str) -> str:
 class Cortex:
     """Orquestrador com persona JARVIS."""
 
-    def __init__(self, router: ModelRouter, db, specialties: dict, console=None):
+    def __init__(
+        self,
+        router: ModelRouter,
+        db,
+        specialties: dict,
+        console=None,
+        hippocampus=None,
+    ):
         self.router = router
         self.db = db
         self.specialties = specialties or {}
         self.console = console
+        # Apoio de ML opcional. Se None (ou ML_ENABLED=false), o CORTEX
+        # comporta-se exactamente como a base — sem qualquer chamada.
+        self.hippocampus = hippocampus
         self.endpoint, self.model, _ = component_config("cortex")
         self.system = cortex_system_prompt()
+
+    def _hippocampus_hint(self, state: dict) -> str:
+        """Consulta o HIPPOCAMPUS: que abordagem funcionou no passado.
+
+        Sempre consultivo — o resultado entra no prompt como contexto, nunca
+        como decisão. Se não houver camada de ML, modelo activo ou dados
+        suficientes, devolve string vazia e nada muda.
+        """
+        if self.hippocampus is None:
+            return ""
+        from .ml_features import extract_cortex_features
+
+        features = extract_cortex_features(state.get("task", ""), self.db)
+        result = self.hippocampus.consult("cortex", features)
+        if not result:
+            return ""
+        self.hippocampus.log_prediction(
+            state.get("cycle_id", 0), state.get("iteration", 0),
+            "cortex", result.get("prediction"),
+        )
+        self._log(
+            "HIPPOCAMPUS (consultivo): "
+            f"{result.get('prediction', 0):.0f}% esperado em tarefas semelhantes."
+        )
+        return (
+            "\n\nApoio do HIPPOCAMPUS (histórico local, meramente consultivo "
+            "— a decisão é tua):\n" + result.get("suggestion", "") + "\n"
+        )
 
     # --- Utilitário de geração -------------------------------------------
     def _generate(self, prompt: str, timeout: float = 120.0) -> str:
@@ -118,6 +156,7 @@ class Cortex:
             f"{task}\n\n"
             "Define a LÓGICA base (passos e estrutura) e o CÓDIGO base "
             "inicial. Responde em duas secções separadas por '===CODIGO==='."
+            + self._hippocampus_hint(state)
         )
         out = self._generate(prompt)
         if "===CODIGO===" in out:
@@ -144,6 +183,7 @@ class Cortex:
             "Feedback do CEREBELLUM:\n" + feedback + "\n\n"
             "Aprimora o código base tendo em conta o feedback. Devolve só "
             "o código base aprimorado."
+            + self._hippocampus_hint(state)
         )
         out = self._generate(prompt)
         if out and not out.startswith("[CORTEX_ERRO]"):

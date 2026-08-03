@@ -1,0 +1,18 @@
+# ==========================================================================
+# Requirements adicionais — EXTENSÃO HIPPOCAMPUS (apoio de ML)
+# ==========================================================================
+# Só necessários para activar ML_ENABLED=true. A base do MIND corre sem
+# nenhum destes pacotes: sem eles, o HIPPOCAMPUS fica em cold start e
+# consult() devolve None, exactamente como se a camada não existisse.
+#
+# Nota: sentence-transformers puxa torch (peso considerável, compete com os
+# LLMs pela GPU). Confirmar capacidade do hardware antes de activar
+# ML_ENABLED=true.
+#
+# Instalação: pip install -r requirements-ml.txt
+
+scikit-learn>=1.5.0
+xgboost>=2.1.0
+sentence-transformers>=3.0.0
+radon>=6.0.1
+pandas>=2.2.0

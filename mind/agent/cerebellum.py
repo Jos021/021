@@ -33,14 +33,32 @@ CEREBELLUM_SYSTEM = (
 class Cerebellum:
     """Revisor/auditor com validação cruzada."""
 
-    def __init__(self, router: ModelRouter, db, console=None):
+    def __init__(self, router: ModelRouter, db, console=None, hippocampus=None):
         self.router = router
         self.db = db
         self.console = console
+        # Apoio de ML opcional — ver agent/hippocampus.py. Sempre consultivo,
+        # com uma única excepção assimétrica: pode apoiar auto-REJEIÇÃO.
+        self.hippocampus = hippocampus
         self.endpoint, self.model, _ = component_config("cerebellum")
         self.system = CEREBELLUM_SYSTEM
         self.approval_threshold = float(os.getenv("APPROVAL_THRESHOLD", "98"))
         self.divergence_threshold = float(os.getenv("DIVERGENCE_THRESHOLD", "15"))
+
+    def _consult_hippocampus(self, state: dict) -> dict | None:
+        """Consulta o HIPPOCAMPUS sobre zonas de risco e probabilidade.
+
+        Devolve None se a camada estiver desligada, sem modelo activo ou em
+        cold start — nesse caso o CEREBELLUM funciona exactamente como a base.
+        """
+        if self.hippocampus is None:
+            return None
+        from .ml_features import extract_cerebellum_features
+
+        features = extract_cerebellum_features(
+            state.get("organized_code", ""), state.get("test_results", ""), self.db
+        )
+        return self.hippocampus.consult("cerebellum", features)
 
     def _generate(self, prompt: str, timeout: float = 120.0) -> str:
         if not self.model:
@@ -89,11 +107,24 @@ class Cerebellum:
     def audit(self, state: dict) -> dict:
         """Audita o código organizado (lógica + funcionalidade)."""
         t0 = time.time()
+        # Consulta ao HIPPOCAMPUS: zonas com padrões de risco conhecidos.
+        hint = ""
+        ml = self._consult_hippocampus(state)
+        if ml:
+            hint = (
+                "\n\nApoio do HIPPOCAMPUS (histórico local, consultivo):\n"
+                + ml.get("suggestion", "") + "\n"
+            )
+            self._log(
+                f"HIPPOCAMPUS: risco={ml.get('confidence', 0):.2f} "
+                f"(prob. passar {ml.get('prediction', 0):.2f})."
+            )
         prompt = (
             "Código organizado (com marcadores [NEURON_N]):\n"
             + state.get("organized_code", "") + "\n\n"
             "Faz auditoria: verifica se cada NEURON ficou no seu âmbito, "
             "coerência lógica e cobertura funcional. Output estruturado."
+            + hint
         )
         out = self._generate(prompt)
         self.db.log_iteration(
@@ -134,6 +165,15 @@ class Cerebellum:
         divergência (3ª ronda) e a penalização por marcadores órfãos.
         """
         t0 = time.time()
+
+        # --- Auto-rejeição do HIPPOCAMPUS (única excepção assimétrica) ----
+        # Se um padrão de falha conhecido for detectado com confiança
+        # >= ML_AUTO_REJECT_CONFIDENCE, reprova-se já, sem esperar pela
+        # análise completa do LLM. NUNCA existe o inverso (auto-aprovação).
+        ml = self._consult_hippocampus(state)
+        if ml and ml.get("auto_reject"):
+            return self._auto_reject(state, ml, t0)
+
         prompt = (
             "Resultados dos testes (independente do relatório do CORTEX):\n"
             + state.get("test_results", "") + "\n\n"
@@ -205,7 +245,78 @@ class Cerebellum:
             f"Fase 3: {decision} a {final_pct:.1f}% "
             f"(cortex={pct_cortex:.0f} / cerebellum={pct_cere:.0f})."
         )
+        self._record_ml_outcome(state, final_pct, ml)
         return state
+
+    # ------------------------------------------------------------------
+    # HIPPOCAMPUS — auto-rejeição e acumulação de histórico
+    # ------------------------------------------------------------------
+    def _auto_reject(self, state: dict, ml: dict, t0: float) -> dict:
+        """Reprova o ciclo por padrão de falha conhecido de alta confiança.
+
+        Assimetria de segurança: esta é a ÚNICA decisão que o HIPPOCAMPUS
+        pode apoiar sozinho, e é sempre no sentido restritivo. A razão fica
+        sempre registada.
+        """
+        reason = ml.get("reason", "padrão de falha conhecido")
+        state["functionality_pct"] = 0.0
+        state["status"] = "in_progress"
+        state["cerebellum_report"] = f"[AUTO-REJEIÇÃO HIPPOCAMPUS] {reason}"
+        # Sem melhorias atribuídas pelo LLM, todos os NEURONS activos são
+        # revisitados na ronda seguinte.
+        state["improvements"] = {
+            nid: "Rever: o histórico indica padrão de falha nesta zona."
+            for nid in state.get("active_neurons", [])
+        }
+        self.db.log_decision(
+            state["cycle_id"], state["iteration"], "cerebellum",
+            f"Auto-rejeição apoiada pelo HIPPOCAMPUS: {reason}",
+        )
+        self.db.log_iteration(
+            state["cycle_id"], state["iteration"], "3", "cerebellum",
+            input_summary="auto-rejeição hippocampus",
+            output_summary="reprovado sem análise completa do LLM",
+            full_output=reason, duration_seconds=time.time() - t0,
+        )
+        self._log(f"Fase 3: AUTO-REJEIÇÃO (HIPPOCAMPUS) — {reason}")
+        self._record_ml_outcome(state, 0.0, ml)
+        return state
+
+    def _record_ml_outcome(self, state: dict, final_pct: float, ml: dict = None) -> None:
+        """Acumula histórico de treino e a concordância ML vs LLM.
+
+        Corre mesmo com ML_ENABLED=false — é assim que o volume necessário
+        ao primeiro treino se acumula antes de a camada ser activada.
+        """
+        if self.hippocampus is None:
+            return
+        from .ml_features import (
+            extract_cerebellum_features,
+            extract_cortex_features,
+        )
+
+        cycle_id = state.get("cycle_id")
+        # Amostra do CORTEX: tarefa -> % de funcionalidade atingida.
+        self.hippocampus.record_sample(
+            "cortex", cycle_id,
+            extract_cortex_features(state.get("task", ""), self.db),
+            final_pct,
+        )
+        # Amostra do CEREBELLUM: código/testes -> % de funcionalidade.
+        self.hippocampus.record_sample(
+            "cerebellum", cycle_id,
+            extract_cerebellum_features(
+                state.get("organized_code", ""),
+                state.get("test_results", ""),
+                self.db,
+            ),
+            final_pct,
+        )
+        if ml:
+            self.hippocampus.log_prediction(
+                cycle_id, state.get("iteration", 0), "cerebellum",
+                ml.get("prediction"), str(final_pct),
+            )
 
     def _penalize_orphan_markers(self, state: dict, pct: float) -> float:
         """Reduz a % se sobrarem marcadores órfãos por preencher.

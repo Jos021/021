@@ -22,3 +22,10 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Modelos treinados do HIPPOCAMPUS (artefactos locais, não versionar)
+models/hippocampus/*.joblib
+models/hippocampus/*.pkl
+
+# Exportações ML
+datasets/*.csv

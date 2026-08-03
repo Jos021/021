@@ -116,11 +116,14 @@ class MindGraph:
     lógica de fases e transições) — útil em desenvolvimento/testes.
     """
 
-    def __init__(self, router, db, specialties, console=None):
+    def __init__(self, router, db, specialties, console=None, hippocampus=None):
         self.db = db
         self.console = console
-        self.cortex = Cortex(router, db, specialties, console)
-        self.cerebellum = Cerebellum(router, db, console)
+        # HIPPOCAMPUS é opcional e sempre consultivo. Com ML_ENABLED=false
+        # (ou hippocampus=None) o ciclo corre exactamente como a base.
+        self.hippocampus = hippocampus
+        self.cortex = Cortex(router, db, specialties, console, hippocampus)
+        self.cerebellum = Cerebellum(router, db, console, hippocampus)
         self.neurons = build_neurons(router, db, specialties)
         self.max_iterations = int(os.getenv("MUNDJI_MAX_ITERATIONS", "10"))
         self.neuron_timeout = float(os.getenv("NEURON_TIMEOUT_SECONDS", "60"))

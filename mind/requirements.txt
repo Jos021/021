@@ -1,3 +1,5 @@
+# Base do MIND. A extensão HIPPOCAMPUS (apoio de ML) tem requisitos
+# adicionais em requirements-ml.txt — só necessários para ML_ENABLED=true.
 langgraph>=0.2.0
 langchain-openai>=0.2.0
 apscheduler>=3.10.4
