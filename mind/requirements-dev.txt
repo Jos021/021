@@ -1,0 +1,12 @@
+# ==========================================================================
+# Requirements de desenvolvimento — suite de testes
+# ==========================================================================
+# Instalação: pip install -r requirements-dev.txt
+# Execução:   python -m pytest
+#
+# Os testes que exigem as dependências de ML (requirements-ml.txt) são
+# saltados automaticamente se elas não estiverem instaladas. Os princípios
+# de segurança do HIPPOCAMPUS — cold-start seguro e assimetria — são
+# testados sempre, porque é sem modelo que têm de se aguentar.
+
+pytest>=8.0.0

@@ -29,3 +29,6 @@ models/hippocampus/*.pkl
 
 # Exportações ML
 datasets/*.csv
+
+# Cache do pytest
+.pytest_cache/
