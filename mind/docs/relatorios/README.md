@@ -10,8 +10,10 @@ Um relatório em PDF por sessão de trabalho concluída. Cada um cobre:
 5. **O que poderia fazer** — possibilidades que a arquitectura suporta
 6. **O que vou fazer a seguir** — plano ordenado por prioridade
 
-Nomenclatura: `Relatorio_MIND_AAAA-MM-DD.pdf`
+Nomenclatura: `Relatorio_MIND_AAAA-MM-DD[_NN_assunto].pdf` — o sufixo
+distingue vários relatórios do mesmo dia.
 
 | Relatório | Âmbito |
 |---|---|
 | `Relatorio_MIND_2026-08-03.pdf` | Base do MIND (commit `ac25c16`) e extensão HIPPOCAMPUS (commit `fdcb706`) |
+| `Relatorio_MIND_2026-08-03_02_suite_de_testes.pdf` | Suite de testes — ponto 1 do plano (commit `4f51da6`) |
