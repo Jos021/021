@@ -1,0 +1,140 @@
+# Critério de Selecção de Modelo — MIND
+
+Antes de fixar o modelo de **qualquer** componente (CORTEX, CEREBELLUM,
+NEURON 1-6), seguir e documentar aqui o processo abaixo. Os campos `_MODEL`
+ficam **vazios** por defeito no `.env` — só se preenchem depois de a decisão
+estar documentada nesta página.
+
+## Processo (obrigatório)
+
+1. **Pesquisar no HuggingFace** se existe modelo já especializado na função
+   exacta do componente.
+2. **Avaliar contra critérios:**
+   - Benchmark relevante à função real do componente
+   - Licença de uso comercial
+   - Tamanho compatível com o hardware disponível
+   - Compatibilidade de idioma/formato (português europeu; formato de output)
+   - Comunidade activa (manutenção, issues, downloads)
+   - Resultado em teste-piloto próprio (5-10 tarefas reais)
+3. **Decidir:**
+   - Usar directamente se passar nos critérios; **senão**,
+   - Usar modelo genérico forte sem fine-tuning, marcado como **candidato a
+     fine-tuning futuro** quando houver dados suficientes na SYNAPSE DB
+     (exportáveis via `python main.py export`).
+
+## Princípio de dimensionamento
+
+Os modelos **não** são todos do mesmo tamanho por padrão — cada componente
+recebe um modelo dimensionado ao esforço cognitivo real da sua função:
+
+- **CORTEX** = maior modelo disponível (orquestração, decisão, persona)
+- **CEREBELLUM** = médio-alto (auditoria, validação cruzada)
+- **NEURONS** = dimensionados caso a caso, conforme a complexidade real da
+  parte que cada um gera
+
+## Treino local ou cloud
+
+Independente de onde o MIND corre em produção — pode-se treinar na cloud e
+servir localmente, ou o inverso. A SYNAPSE DB e todos os dados operacionais
+ficam **sempre locais**; só datasets exportados e anonimizados poderiam
+alimentar treino externo, por decisão explícita do operador.
+
+---
+
+## Ficha por componente (campos por preencher)
+
+### CORTEX
+- Função exacta: orquestração, distribuição, decisão (com persona JARVIS)
+- Candidatos HuggingFace pesquisados:
+- Benchmark relevante:
+- Licença:
+- Tamanho / hardware:
+- Idioma / formato:
+- Comunidade:
+- Resultado do teste-piloto (5-10 tarefas):
+- **Decisão:**
+- Candidato a fine-tuning futuro? (sim/não):
+
+### CEREBELLUM
+- Função exacta: auditoria técnica, validação cruzada, cálculo de %
+- Candidatos HuggingFace pesquisados:
+- Benchmark relevante:
+- Licença:
+- Tamanho / hardware:
+- Idioma / formato:
+- Comunidade:
+- Resultado do teste-piloto (5-10 tarefas):
+- **Decisão:**
+- Candidato a fine-tuning futuro? (sim/não):
+
+### NEURON 1
+- Especialidade:
+- Candidatos HuggingFace pesquisados:
+- Benchmark relevante:
+- Licença:
+- Tamanho / hardware:
+- Idioma / formato:
+- Comunidade:
+- Resultado do teste-piloto (5-10 tarefas):
+- **Decisão:**
+- Candidato a fine-tuning futuro? (sim/não):
+
+### NEURON 2
+- Especialidade:
+- Candidatos HuggingFace pesquisados:
+- Benchmark relevante:
+- Licença:
+- Tamanho / hardware:
+- Idioma / formato:
+- Comunidade:
+- Resultado do teste-piloto (5-10 tarefas):
+- **Decisão:**
+- Candidato a fine-tuning futuro? (sim/não):
+
+### NEURON 3
+- Especialidade:
+- Candidatos HuggingFace pesquisados:
+- Benchmark relevante:
+- Licença:
+- Tamanho / hardware:
+- Idioma / formato:
+- Comunidade:
+- Resultado do teste-piloto (5-10 tarefas):
+- **Decisão:**
+- Candidato a fine-tuning futuro? (sim/não):
+
+### NEURON 4
+- Especialidade:
+- Candidatos HuggingFace pesquisados:
+- Benchmark relevante:
+- Licença:
+- Tamanho / hardware:
+- Idioma / formato:
+- Comunidade:
+- Resultado do teste-piloto (5-10 tarefas):
+- **Decisão:**
+- Candidato a fine-tuning futuro? (sim/não):
+
+### NEURON 5
+- Especialidade:
+- Candidatos HuggingFace pesquisados:
+- Benchmark relevante:
+- Licença:
+- Tamanho / hardware:
+- Idioma / formato:
+- Comunidade:
+- Resultado do teste-piloto (5-10 tarefas):
+- **Decisão:**
+- Candidato a fine-tuning futuro? (sim/não):
+
+### NEURON 6
+- Especialidade:
+- Candidatos HuggingFace pesquisados:
+- Benchmark relevante:
+- Licença:
+- Tamanho / hardware:
+- Idioma / formato:
+- Comunidade:
+- Resultado do teste-piloto (5-10 tarefas):
+- **Decisão:**
+- Candidato a fine-tuning futuro? (sim/não):
