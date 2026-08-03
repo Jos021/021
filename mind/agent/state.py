@@ -28,6 +28,10 @@ class AgentState(TypedDict, total=False):
     active_neurons: list             # quais NEURONS correm nesta iteração
     neuron_outputs: dict             # {neuron_id: código devolvido}
     contract_violations: list        # lista de neuron_ids que violaram contrato
+    # Fotografia das secções alheias por NEURON, tirada ANTES de distribuir.
+    # É a referência do diff real na validação de contrato de interface.
+    foreign_sections: dict           # {neuron_id: {secção: conteúdo}}
+    contract_baseline: str           # código a que essa fotografia se refere
     organized_code: str              # código reunido/organizado pelo CORTEX
 
     # --- Fase 3: testes, avaliação e decisão -----------------------------
@@ -61,6 +65,8 @@ def new_state(task: str, cycle_id: int) -> AgentState:
         active_neurons=[],
         neuron_outputs={},
         contract_violations=[],
+        foreign_sections={},
+        contract_baseline="",
         organized_code="",
         cortex_test_report="",
         cerebellum_report="",

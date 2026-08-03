@@ -18,6 +18,23 @@ Runners suportados (cada um respeita MUNDJI_SANDBOX_TIMEOUT):
 
 Cada runner corre isolado, restrito ao workspace/, sem herdar variáveis de
 ambiente sensíveis do processo pai.
+
+--------------------------------------------------------------------------
+DECISÃO CONSCIENTE DE NÃO-FAZER: isolamento por contentores
+--------------------------------------------------------------------------
+O isolamento actual é por subprocess, com ambiente mínimo e directório
+restrito ao workspace/. NÃO se usam contentores, namespaces nem limites de
+recursos, e isso é uma decisão tomada, não uma lacuna por resolver.
+
+Razão: o MIND gera e executa o seu próprio código, não código hostil de
+terceiros. Reforçar com contentores agora seria complexidade prematura — o
+mesmo tipo que foi recusado com o Redis, com o ML embutido nos agentes e
+com as oito bases de dados separadas.
+
+Caminho futuro, se e quando o MIND passar a correr código não confiável
+(por exemplo, código submetido por terceiros ou obtido da internet):
+contentores efémeros ou namespaces com limites de CPU, memória e rede. Até
+lá, os princípios de segurança aplicados são os documentados acima.
 """
 
 import os

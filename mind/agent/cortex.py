@@ -20,6 +20,7 @@ import time
 
 from .model_router import ModelError, ModelRouter, component_config
 from .persona import cortex_system_prompt
+from .report_schema import INSTRUCAO_JSON, parse_relatorio
 from .sandbox import get_language_for_section, run_section
 from .sanitizer import sanitize_output
 
@@ -53,6 +54,53 @@ def find_other_markers(code: str, neuron_id: str) -> list:
         if match.group(1) != own:
             found.append(f"neuron_{match.group(1)}")
     return sorted(set(found))
+
+
+# Chave da secção que antecede o primeiro marcador (imports, constantes
+# partilhadas). Não pertence a nenhum NEURON — alterá-la é sair do âmbito.
+PREAMBULO = "__preambulo__"
+
+
+def split_by_markers(code: str) -> dict:
+    """Parte o código em secções: {chave: conteúdo}.
+
+    A chave é PREAMBULO para o que antecede o primeiro marcador, e
+    'neuron_N' para cada bloco marcado. Marcadores repetidos acumulam no
+    mesmo bloco, para que uma resposta que duplique secções não passe
+    despercebida.
+    """
+    seccoes: dict = {}
+    chave = PREAMBULO
+    pos = 0
+    for m in MARKER_RE.finditer(code or ""):
+        seccoes.setdefault(chave, []).append(code[pos:m.start()])
+        chave = f"neuron_{m.group(1)}"
+        pos = m.end()
+    seccoes.setdefault(chave, []).append((code or "")[pos:])
+    return {k: "\n".join(v) for k, v in seccoes.items()}
+
+
+def foreign_sections(code: str, neuron_id: str) -> dict:
+    """Todas as secções que NÃO pertencem ao NEURON indicado."""
+    return {k: v for k, v in split_by_markers(code).items() if k != neuron_id}
+
+
+def _normalizar(texto: str) -> str:
+    """Normaliza whitespace final de cada linha, para o diff não ser ruidoso."""
+    return "\n".join(l.rstrip() for l in (texto or "").splitlines()).strip()
+
+
+def diff_foreign_sections(antes: dict, depois: dict) -> list:
+    """Secções alheias cujo conteúdo mudou entre antes e depois.
+
+    Comparação linha a linha após normalização do whitespace final. Uma
+    secção que desapareça ou apareça conta igualmente como alteração.
+    """
+    alteradas = []
+    for chave in set(antes) | set(depois):
+        if _normalizar(antes.get(chave, "")) != _normalizar(depois.get(chave, "")):
+            alteradas.append(chave)
+    return sorted(alteradas)
 
 
 def extract_section(code: str, neuron_id: str) -> str:
@@ -238,12 +286,26 @@ class Cortex:
         enabled = set(self._enabled_neurons())
         active = [nid for nid in markers if nid in enabled]
         state["active_neurons"] = active
+        self._snapshot_foreign_sections(state, state["base_code"])
         self.db.log_decision(
             state["cycle_id"], state["iteration"], "cortex",
             f"1ª passagem: distribuído a todos os NEURONS activos {active}.",
         )
         self._log(f"Fase 1->2: distribuído a todos os NEURONS: {active}")
         return state
+
+    def _snapshot_foreign_sections(self, state: dict, code: str) -> None:
+        """Guarda, por NEURON activo, o conteúdo das secções que não são suas.
+
+        É esta fotografia, tirada ANTES de distribuir, que torna possível o
+        diff real na validação de contrato: sem ela só se poderia verificar
+        a presença de marcadores, que é uma pista, não uma prova.
+        """
+        state["contract_baseline"] = code or ""
+        state["foreign_sections"] = {
+            nid: foreign_sections(code or "", nid)
+            for nid in state.get("active_neurons", [])
+        }
 
     # ================================================================
     # FASE 2 — Desenvolvimento
@@ -265,12 +327,27 @@ class Cortex:
                     f"{neuron_id} não respondeu ou devolveu erro.",
                 )
                 continue
+            # Filtro rápido e barato: presença de marcadores. É uma pista,
+            # não uma prova — por isso não é a verificação autoritativa.
             reasons = []
             if not marker_present(output, neuron_id):
                 reasons.append("marcador próprio ausente")
             others = find_other_markers(output, neuron_id)
             if others:
                 reasons.append(f"contém marcadores alheios {others}")
+
+            # Verificação autoritativa: diff real das secções alheias.
+            # Reconstrói-se o ficheiro integrando a resposta e comparam-se as
+            # secções que não pertencem a este NEURON com a fotografia tirada
+            # antes da distribuição. Apanha alterações fora do âmbito que a
+            # heurística acima deixa passar — por exemplo, mexer no preâmbulo
+            # partilhado sem tocar em nenhum marcador.
+            alteradas = self._diff_out_of_scope(state, neuron_id, output)
+            if alteradas:
+                reasons.append(
+                    f"alterou código fora do seu âmbito: {alteradas}"
+                )
+
             if reasons:
                 violations.append(neuron_id)
                 self.db.log_iteration(
@@ -290,6 +367,39 @@ class Cortex:
         else:
             self._log("Fase 2: todos os NEURONS respeitaram o contrato.")
         return state
+
+    def _diff_out_of_scope(self, state: dict, neuron_id: str, output: str) -> list:
+        """Secções alheias que a resposta do NEURON alterou.
+
+        A reconstrução é feita por secções, não por concatenação de texto: a
+        resposta é partida pelos seus próprios marcadores e, para cada secção
+        alheia, usa-se a versão que a resposta apresenta — quando apresenta
+        alguma. O que a resposta não menciona fica como estava.
+
+        Isto é o que distingue um NEURON que repete o preâmbulo intacto (que
+        é legítimo, porque recebe sempre o código base completo) de um que o
+        altera (que é violação).
+
+        Regra deliberada: uma secção alheia que a resposta devolva vazia
+        conta como 'não mencionada', não como apagada. Preferimos não
+        inventar violações — apagar imports partilhados parte o código e é
+        apanhado pelos testes da sandbox, ao passo que uma violação falsa
+        queimaria um ciclo inteiro sem motivo.
+
+        Devolve lista vazia quando não há fotografia de referência (estado
+        construído sem passar pela distribuição): sem referência, o diff
+        abstém-se e só a heurística se aplica.
+        """
+        antes = (state.get("foreign_sections") or {}).get(neuron_id)
+        if antes is None:
+            return []
+
+        apresentadas = foreign_sections(output or "", neuron_id)
+        depois = dict(antes)
+        for chave, conteudo in apresentadas.items():
+            if _normalizar(conteudo):
+                depois[chave] = conteudo
+        return diff_foreign_sections(antes, depois)
 
     def organize(self, state: dict) -> dict:
         """Reúne e organiza o código dos NEURONS na estrutura marcada.
@@ -382,16 +492,18 @@ class Cortex:
     def report(self, state: dict) -> dict:
         """Gera o relatório INDEPENDENTE do CORTEX sobre os testes."""
         t0 = time.time()
+        # O relatório do CORTEX alimenta a mesma validação cruzada que o do
+        # CEREBELLUM, por isso usa o mesmo esquema fixo — ler um por JSON e
+        # o outro por regex deixaria metade do cálculo na fragilidade antiga.
         prompt = (
             "Resultados dos testes na sandbox:\n"
             + state["test_results"] + "\n\n"
-            "Gera o TEU relatório independente: estima a percentagem de "
-            "funcionalidade (0-100), lista falhas e melhorias necessárias. "
-            "Começa a resposta com 'PCT: <numero>'."
+            "Gera a TUA avaliação independente: percentagem de funcionalidade, "
+            "falhas encontradas e melhorias necessárias.\n\n" + INSTRUCAO_JSON
         )
         out = self._generate(prompt)
         state["cortex_test_report"] = out
-        pct = _extract_pct(out)
+        pct = parse_relatorio(out).functionality_pct
         self.db.log_report(
             state["cycle_id"], state["iteration"], pct,
             failures="(ver relatório cortex)", improvements="",
@@ -443,6 +555,11 @@ class Cortex:
                     "Rollback: retomado a partir da melhor versão conhecida.",
                 )
                 self._log("Rollback: retomada a melhor versão até agora.")
+        # Nova fotografia das secções alheias: nas iterações de refinamento a
+        # referência é o código organizado, não o código base original.
+        self._snapshot_foreign_sections(
+            state, state.get("organized_code") or state.get("base_code", "")
+        )
         self._log("Refinamento: melhorias distribuídas aos NEURONS visados.")
         return state
 

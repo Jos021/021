@@ -84,6 +84,61 @@ def test_linguagem_por_omissao_e_python():
     assert get_language_for_section("neuron_9", parse_markers(CODIGO)) == "python"
 
 
+# --- Marcadores órfãos ----------------------------------------------------
+# Um marcador sem substituição no código organizado é falha de
+# funcionalidade: nunca se compila um resultado final com marcadores por
+# preencher, e a percentagem tem de reflectir isso.
+def test_marcador_orfao_e_detectavel_pela_seccao_vazia():
+    codigo = "# [NEURON_1:python]\ndef feito(): return 1\n# [NEURON_2:python]\npass"
+    assert extract_section(codigo, "neuron_1")
+    assert extract_section(codigo, "neuron_2") == "pass", \
+        "uma secção que ficou em 'pass' é um marcador por preencher"
+
+
+def test_marcador_declarado_sem_seccao_no_codigo():
+    """O marcador existe nos markers mas não no código organizado."""
+    markers = parse_markers("# [NEURON_1]\ndef x(): pass")
+    assert "neuron_1" in markers
+    assert extract_section("# [NEURON_1]\ndef x(): pass", "neuron_3") == ""
+
+
+def test_penalizacao_de_marcadores_orfaos(db, cycle_id, com_modelos):
+    """A percentagem final tem de baixar quando sobram marcadores por preencher."""
+    from agent.cerebellum import Cerebellum
+    from tests.conftest import RouterFalso
+
+    router = RouterFalso(respostas={"cerebellum": RouterFalso.avaliacao(100)})
+    cerebellum = Cerebellum(router, db, None)
+    estado = {
+        "cycle_id": cycle_id, "iteration": 1, "task": "t",
+        "cortex_test_report": RouterFalso.avaliacao(100),
+        "test_results": "x", "active_neurons": [],
+        "markers": {"neuron_1": {"language": "python"},
+                    "neuron_2": {"language": "python"}},
+        "organized_code": ("# [NEURON_1]\ndef feito(): return 1\n"
+                           "# [NEURON_2]\npass"),
+    }
+    cerebellum.compare_and_decide(estado)
+    assert estado["functionality_pct"] < 100
+
+
+def test_todos_preenchidos_nao_sao_penalizados(db, cycle_id, com_modelos):
+    from agent.cerebellum import Cerebellum
+    from tests.conftest import RouterFalso
+
+    router = RouterFalso(respostas={"cerebellum": RouterFalso.avaliacao(100)})
+    cerebellum = Cerebellum(router, db, None)
+    estado = {
+        "cycle_id": cycle_id, "iteration": 1, "task": "t",
+        "cortex_test_report": RouterFalso.avaliacao(100),
+        "test_results": "x", "active_neurons": [],
+        "markers": {"neuron_1": {"language": "python"}},
+        "organized_code": "# [NEURON_1]\ndef feito(): return 1",
+    }
+    cerebellum.compare_and_decide(estado)
+    assert estado["functionality_pct"] == 100
+
+
 def test_linguagem_nao_e_inferida_do_conteudo():
     """Uma docstring que fala de 'def ' não pode alterar a linguagem.
 

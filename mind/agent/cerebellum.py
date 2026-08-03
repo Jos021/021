@@ -19,6 +19,11 @@ import re
 import time
 
 from .model_router import ModelError, ModelRouter, component_config
+from .report_schema import (
+    INSTRUCAO_JSON,
+    parse_relatorio,
+    registar_desvio_de_formato,
+)
 
 # CEREBELLUM não tem persona: system prompt técnico e neutro.
 CEREBELLUM_SYSTEM = (
@@ -177,15 +182,26 @@ class Cerebellum:
         prompt = (
             "Resultados dos testes (independente do relatório do CORTEX):\n"
             + state.get("test_results", "") + "\n\n"
-            "Gera o TEU relatório independente. Estima a percentagem de "
-            "funcionalidade (0-100) e atribui melhorias a NEURONS ESPECÍFICOS "
-            "(formato 'neuron_N: <melhoria>'). Começa com 'PCT: <numero>'."
+            "Gera a TUA avaliação independente: percentagem de funcionalidade, "
+            "falhas encontradas, e melhorias atribuídas a NEURONS ESPECÍFICOS "
+            "(nunca genéricas).\n\n" + INSTRUCAO_JSON
         )
         cere_report = self._generate(prompt)
         state["cerebellum_report"] = cere_report
 
-        pct_cortex = _extract_pct(state.get("cortex_test_report", ""))
-        pct_cere = _extract_pct(cere_report)
+        avaliacao = parse_relatorio(cere_report)
+        registar_desvio_de_formato(
+            self.db, state["cycle_id"], state["iteration"], "cerebellum",
+            avaliacao,
+        )
+        pct_cere = avaliacao.functionality_pct
+
+        avaliacao_cortex = parse_relatorio(state.get("cortex_test_report", ""))
+        registar_desvio_de_formato(
+            self.db, state["cycle_id"], state["iteration"], "cortex",
+            avaliacao_cortex,
+        )
+        pct_cortex = avaliacao_cortex.functionality_pct
 
         # Regra de divergência: força 3ª ronda antes de decidir.
         divergence = abs(pct_cortex - pct_cere)
@@ -200,10 +216,12 @@ class Cerebellum:
             )
             third = self._generate(
                 "Terceira verificação. Reconcilia as duas estimativas "
-                f"({pct_cortex} vs {pct_cere}). Começa com 'PCT: <numero>'.\n\n"
-                + state.get("test_results", "")
+                f"({pct_cortex} vs {pct_cere}) a partir dos resultados dos "
+                "testes.\n\n" + state.get("test_results", "") + "\n\n"
+                + INSTRUCAO_JSON
             )
-            pct_third = _extract_pct(third)
+            reconciliacao = parse_relatorio(third)
+            pct_third = reconciliacao.functionality_pct
             final_pct = pct_third if pct_third > 0 else (pct_cortex + pct_cere) / 2
         else:
             # Validação cruzada normal: média das duas estimativas.
@@ -213,8 +231,14 @@ class Cerebellum:
         final_pct = self._penalize_orphan_markers(state, final_pct)
 
         state["functionality_pct"] = final_pct
-        improvements = self._extract_improvements(cere_report)
+        improvements = avaliacao.improvements
         state["improvements"] = improvements
+
+        # auto_reject vindo do modelo só pode reprovar, nunca aprovar: a
+        # assimetria de segurança aplica-se aqui tal como no HIPPOCAMPUS.
+        if avaliacao.auto_reject:
+            final_pct = min(final_pct, self.approval_threshold - 1)
+            state["functionality_pct"] = final_pct
 
         # Guardar melhor versão para rollback.
         if final_pct >= state.get("best_pct_so_far", 0.0):
@@ -227,7 +251,7 @@ class Cerebellum:
 
         self.db.log_report(
             state["cycle_id"], state["iteration"], final_pct,
-            failures="(ver relatório cerebellum)",
+            failures="; ".join(avaliacao.failures) or "(nenhuma reportada)",
             improvements="; ".join(f"{k}:{v}" for k, v in improvements.items()),
         )
         self.db.log_decision(

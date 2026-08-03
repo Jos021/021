@@ -5,6 +5,7 @@ própria e um workspace próprio em directório temporário — nada toca no
 estado real do projecto, e a ordem de execução nunca importa.
 """
 
+import json
 import os
 import sys
 
@@ -90,14 +91,24 @@ class RouterFalso:
                 return f"# [NEURON_1:python]\n{self.codigo_neuron}"
             if "Aprimora" in prompt:
                 return "# código base aprimorado"
-            if "relatório" in prompt.lower():
-                return "PCT: 99\nTudo funciona."
+            if "avaliação" in prompt.lower():
+                return self.avaliacao(99)
             return "Lógica: somar.\n===CODIGO===\n# base\n"
         if component == "cerebellum":
-            if "independente" in prompt or "reconcilia" in prompt.lower():
-                return "PCT: 99\nSem falhas."
+            if "avaliação" in prompt.lower() or "reconcilia" in prompt.lower():
+                return self.avaliacao(99)
             return "Avaliação técnica: ok."
         return ""
+
+    @staticmethod
+    def avaliacao(pct, failures=None, improvements=None, auto_reject=False):
+        """Resposta no esquema JSON fixo que os prompts agora pedem."""
+        return json.dumps({
+            "functionality_pct": pct,
+            "failures": failures or [],
+            "improvements": improvements or {},
+            "auto_reject": auto_reject,
+        })
 
     async def agenerate(self, prompt, model, endpoint, system="",
                         component="", timeout=120):
