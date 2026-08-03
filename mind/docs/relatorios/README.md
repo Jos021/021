@@ -18,3 +18,4 @@ distingue vários relatórios do mesmo dia.
 | `Relatorio_MIND_2026-08-03.pdf` | Base do MIND (commit `ac25c16`) e extensão HIPPOCAMPUS (commit `fdcb706`) |
 | `Relatorio_MIND_2026-08-03_02_suite_de_testes.pdf` | Suite de testes — ponto 1 do plano (commit `4f51da6`) |
 | `Relatorio_MIND_2026-08-03_03_fecho_de_lacunas.pdf` | Pontos 2 a 6: diff de contrato, limpeza git, decisão LangGraph, esquema JSON (commit `7c6d807`) |
+| `Relatorio_MIND_2026-08-03_04_huggingface_gpu_alugada.pdf` | Router para HuggingFace em GPU alugada e avaliação sobre modelos retreinados (commit `deec79d`) |
