@@ -23,6 +23,7 @@ distingue vários relatórios do mesmo dia.
 | `Relatorio_MIND_2026-08-03_06_preparacao_do_piloto.pdf` | Ferramenta de verificação e medição com modelos reais (commit `a143abf`) |
 | `Relatorio_MIND_2026-08-03_07_ensaio_do_runbook.pdf` | Ensaio das 4 passagens sem GPU; discrepância do `ml-status` corrigida (commit `de9e0a1`) |
 | **`Relatorio_MIND_2026-08-03_08_consolidado.pdf`** | **Quadro completo: arquitectura, cronologia, decisões, o que está provado e o que falta** |
+| `Relatorio_MIND_2026-08-05_09_modo_anthropic.pdf` | Quinto modo do router: API da Anthropic directa (commit `a71e5f8`) |
 
 O **relatório consolidado** é o ponto de entrada para quem chega ao projecto:
 resume as 9 entregas, as decisões de arquitectura, e — sobretudo — separa o
