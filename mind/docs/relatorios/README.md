@@ -22,10 +22,13 @@ distingue vários relatórios do mesmo dia.
 | `Relatorio_MIND_2026-08-03_05_sandbox_evolutiva.pdf` | Sandbox de testes evolutiva — instruções 45-61 (commit `06a57a6`) |
 | `Relatorio_MIND_2026-08-03_06_preparacao_do_piloto.pdf` | Ferramenta de verificação e medição com modelos reais (commit `a143abf`) |
 | `Relatorio_MIND_2026-08-03_07_ensaio_do_runbook.pdf` | Ensaio das 4 passagens sem GPU; discrepância do `ml-status` corrigida (commit `de9e0a1`) |
-| **`Relatorio_MIND_2026-08-03_08_consolidado.pdf`** | **Quadro completo: arquitectura, cronologia, decisões, o que está provado e o que falta** |
+| `Relatorio_MIND_2026-08-03_08_consolidado.pdf` | Consolidado até 3 de Agosto — substituído pelo 11 |
 | `Relatorio_MIND_2026-08-05_09_modo_anthropic.pdf` | Quinto modo do router: API da Anthropic directa (commit `a71e5f8`) |
-| **`Relatorio_MIND_2026-08-05_10_o_que_esta_provado.pdf`** | **Ensaio do modo Anthropic; defeito de medição da conformidade corrigido; matriz do que está e não está provado (commit `43068f2`)** |
+| `Relatorio_MIND_2026-08-05_10_o_que_esta_provado.pdf` | Ensaio do modo Anthropic; defeito de medição da conformidade corrigido; matriz do que está e não está provado (commit `43068f2`) |
+| **`Relatorio_MIND_2026-08-05_11_consolidado.pdf`** | **PONTO DE ENTRADA — estado completo: 13 entregas, 8 defeitos corrigidos, o que está e não está provado (commit `8d58276`)** |
 
-O **relatório consolidado** é o ponto de entrada para quem chega ao projecto:
-resume as 9 entregas, as decisões de arquitectura, e — sobretudo — separa o
-que está provado do que continua por provar.
+O **relatório 11 (consolidado)** é o ponto de entrada para quem chega ao
+projecto: resume as 13 entregas, as decisões de arquitectura, os defeitos
+reais encontrados, e — sobretudo — separa linha a linha o que está provado
+do que continua por provar. Substitui o consolidado 08, que é anterior ao
+modo Anthropic.
