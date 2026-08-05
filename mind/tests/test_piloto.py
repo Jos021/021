@@ -168,26 +168,62 @@ def test_cada_tarefa_tem_o_seu_ciclo(db):
     assert resultados[0].cycle_id != resultados[1].cycle_id
 
 
+BEM_FORMADO = ('{"functionality_pct": 99, "failures": [], '
+               '"improvements": {}, "auto_reject": false}')
+
+
 def test_conformidade_json_e_medida(db):
-    """Os desvios já são registados pelo report_schema; aqui só se contam."""
-    from agent.report_schema import parse_relatorio, registar_desvio_de_formato
+    """Os dois desfechos já são registados pelo report_schema; aqui contam-se."""
+    from agent.report_schema import parse_relatorio, registar_conformidade
 
     def grafo_com_desvio():
         class G:
             def run(self, state):
                 cid = state["cycle_id"]
-                db.log_iteration(cid, 1, "3", "cerebellum")
-                db.log_iteration(cid, 1, "3", "cortex")
-                # Um dos dois não respeitou o formato.
-                registar_desvio_de_formato(
+                registar_conformidade(
+                    db, cid, 1, "cortex", parse_relatorio(BEM_FORMADO))
+                registar_conformidade(
                     db, cid, 1, "cerebellum", parse_relatorio("PCT: 50"))
                 return {**state, "status": "approved"}
         return G()
 
     r = correr_piloto(["t"], db, grafo_com_desvio)[0]
-    assert r.chamadas_modelo == 2
+    assert r.relatorios_json == 2
     assert r.desvios_formato == 1
     assert r.conformidade_json == 50.0
+
+
+def test_chamadas_sem_esquema_nao_diluem_a_conformidade(db):
+    """Regressão do defeito que o ensaio em modo anthropic expôs.
+
+    O denominador contava TODAS as chamadas ao CORTEX e ao CEREBELLUM,
+    incluindo as que geram código ou anotam marcadores — que não têm esquema
+    para respeitar. Com um modelo que nunca produzia JSON válido, a
+    conformidade reportada era 77,8% em vez de 0%, e essa percentagem é um
+    critério de escolha de modelo.
+    """
+    from agent.report_schema import parse_relatorio, registar_conformidade
+
+    def grafo():
+        class G:
+            def run(self, state):
+                cid = state["cycle_id"]
+                # 16 chamadas ao modelo que não pedem JSON nenhum.
+                for _ in range(8):
+                    db.log_iteration(cid, 1, "1", "cortex")
+                    db.log_iteration(cid, 1, "2", "cerebellum")
+                # As duas que pediam JSON falharam ambas.
+                registar_conformidade(
+                    db, cid, 1, "cortex", parse_relatorio("PCT: 50"))
+                registar_conformidade(
+                    db, cid, 1, "cerebellum", parse_relatorio("PCT: 50"))
+                return {**state, "status": "approved"}
+        return G()
+
+    r = correr_piloto(["t"], db, grafo)[0]
+    assert r.relatorios_json == 2, "só as respostas com contrato de formato"
+    assert r.conformidade_json == 0.0, \
+        "nenhum JSON válido tem de dar 0%, não uma percentagem diluída"
 
 
 def test_conformidade_none_sem_chamadas(db):
@@ -214,10 +250,10 @@ def test_testes_da_sandbox_sao_contados(db):
 def test_resumo_agrega():
     resultados = [
         ResultadoTarefa("a", 1, status="approved", functionality_pct=99.0,
-                        iteracoes=2, duracao_s=10.0, chamadas_modelo=10,
+                        iteracoes=2, duracao_s=10.0, relatorios_json=10,
                         desvios_formato=1),
         ResultadoTarefa("b", 2, status="needs_human", functionality_pct=40.0,
-                        iteracoes=10, duracao_s=30.0, chamadas_modelo=10,
+                        iteracoes=10, duracao_s=30.0, relatorios_json=10,
                         desvios_formato=3),
     ]
     r = resumir(resultados)
@@ -280,15 +316,20 @@ def test_conformidade_por_componente_sem_dados(db):
 
 def test_conformidade_por_componente_conta_desvios(db, cycle_id):
     from agent.piloto import conformidade_por_componente
-    from agent.report_schema import parse_relatorio, registar_desvio_de_formato
+    from agent.report_schema import parse_relatorio, registar_conformidade
 
-    for _ in range(4):
-        db.log_iteration(cycle_id, 1, "3", "cerebellum")
-    registar_desvio_de_formato(
+    # Três relatórios conformes e um fora do esquema.
+    for _ in range(3):
+        registar_conformidade(
+            db, cycle_id, 1, "cerebellum", parse_relatorio(BEM_FORMADO))
+    registar_conformidade(
         db, cycle_id, 1, "cerebellum", parse_relatorio("PCT: 50"))
+    # Ruído: chamadas ao modelo sem contrato de formato não podem contar.
+    for _ in range(20):
+        db.log_iteration(cycle_id, 1, "1", "cerebellum")
 
     info = conformidade_por_componente(db)["cerebellum"]
-    assert info["chamadas"] == 4
+    assert info["respostas"] == 4
     assert info["desvios"] == 1
     assert info["pct"] == 75.0
 

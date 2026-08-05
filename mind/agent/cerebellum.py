@@ -22,7 +22,7 @@ from .model_router import ModelError, ModelRouter, component_config
 from .report_schema import (
     INSTRUCAO_JSON,
     parse_relatorio,
-    registar_desvio_de_formato,
+    registar_conformidade,
 )
 
 # CEREBELLUM não tem persona: system prompt técnico e neutro.
@@ -228,14 +228,14 @@ class Cerebellum:
 
         avaliacao = parse_relatorio(cere_report)
         state["_formato_respeitado"] = avaliacao.formato_respeitado
-        registar_desvio_de_formato(
+        registar_conformidade(
             self.db, state["cycle_id"], state["iteration"], "cerebellum",
             avaliacao,
         )
         pct_cere = avaliacao.functionality_pct
 
         avaliacao_cortex = parse_relatorio(state.get("cortex_test_report", ""))
-        registar_desvio_de_formato(
+        registar_conformidade(
             self.db, state["cycle_id"], state["iteration"], "cortex",
             avaliacao_cortex,
         )
@@ -260,6 +260,13 @@ class Cerebellum:
             )
             third = self._generate(prompt_terceira, state=state)
             reconciliacao = parse_relatorio(third)
+            # A 3ª ronda também pede JSON, logo também conta para a
+            # conformidade. Faltava aqui, e faltar num sítio enviesa a
+            # percentagem que decide a escolha do modelo.
+            registar_conformidade(
+                self.db, state["cycle_id"], state["iteration"], "cerebellum",
+                reconciliacao,
+            )
             pct_third = reconciliacao.functionality_pct
             final_pct = pct_third if pct_third > 0 else (pct_cortex + pct_cere) / 2
         else:

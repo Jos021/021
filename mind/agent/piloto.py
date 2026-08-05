@@ -58,7 +58,7 @@ class ResultadoTarefa:
     functionality_pct: float = 0.0
     iteracoes: int = 0
     duracao_s: float = 0.0
-    chamadas_modelo: int = 0
+    relatorios_json: int = 0
     desvios_formato: int = 0
     testes_gerados: int = 0
     testes_executados: int = 0
@@ -68,10 +68,10 @@ class ResultadoTarefa:
     @property
     def conformidade_json(self) -> float | None:
         """Percentagem de respostas que respeitaram o esquema JSON."""
-        if not self.chamadas_modelo:
+        if not self.relatorios_json:
             return None
-        ok = max(0, self.chamadas_modelo - self.desvios_formato)
-        return round(ok / self.chamadas_modelo * 100, 1)
+        ok = max(0, self.relatorios_json - self.desvios_formato)
+        return round(ok / self.relatorios_json * 100, 1)
 
 
 def verificar_componentes(db=None, timeout: float = 30.0) -> list:
@@ -172,17 +172,23 @@ def correr_piloto(tarefas: list, db, construir_grafo, console=None,
 
 
 def _medir_conformidade(db, cycle_id: int, resultado: ResultadoTarefa) -> None:
-    """Conta chamadas ao modelo e desvios ao esquema JSON, a partir da DB.
+    """Conta respostas com contrato de formato, e quantas o quebraram.
 
-    Os desvios já são registados automaticamente pelo report_schema — aqui
-    só se contam. É por isso que a conformidade sai sem trabalho extra.
+    O denominador é o número de respostas que DEVIAM ser JSON — não o total
+    de chamadas ao modelo. A diferença não é académica: num ciclo, a maioria
+    das chamadas ao CORTEX gera código, anota marcadores ou aprimora, e não
+    tem esquema nenhum para respeitar. Contá-las diluía os desvios e fazia um
+    modelo que nunca produz JSON válido parecer 78% conforme.
+
+    O report_schema regista os dois desfechos em cada leitura de relatório;
+    aqui só se contam.
     """
     try:
-        chamadas = db._conn.execute(                 # noqa: SLF001
-            "SELECT COUNT(*) AS n FROM iterations WHERE cycle_id = ? "
-            "AND component IN ('cortex', 'cerebellum')", (cycle_id,)
+        total = db._conn.execute(                    # noqa: SLF001
+            "SELECT COUNT(*) AS n FROM decisions WHERE cycle_id = ? "
+            "AND decision_text LIKE '%esquema JSON%'", (cycle_id,)
         ).fetchone()
-        resultado.chamadas_modelo = chamadas["n"] if chamadas else 0
+        resultado.relatorios_json = total["n"] if total else 0
 
         desvios = db._conn.execute(                  # noqa: SLF001
             "SELECT COUNT(*) AS n FROM decisions WHERE cycle_id = ? "
@@ -202,13 +208,17 @@ def conformidade_por_componente(db) -> dict:
     fim da primeira passagem, e é o número que diz se um modelo cumpre o
     contrato de formato.
 
-    Devolve {componente: {"chamadas": N, "desvios": N, "pct": X}}.
+    "respostas" conta apenas as que deviam ser JSON, não todas as chamadas
+    ao modelo — ver _medir_conformidade para a razão.
+
+    Devolve {componente: {"respostas": N, "desvios": N, "pct": X}}.
     """
     resultado = {}
     try:
         for componente in ("cortex", "cerebellum"):
             chamadas = db._conn.execute(          # noqa: SLF001
-                "SELECT COUNT(*) AS n FROM iterations WHERE component = ?",
+                "SELECT COUNT(*) AS n FROM decisions WHERE component = ? "
+                "AND decision_text LIKE '%esquema JSON%'",
                 (componente,)
             ).fetchone()
             desvios = db._conn.execute(           # noqa: SLF001
@@ -219,7 +229,7 @@ def conformidade_por_componente(db) -> dict:
             n = chamadas["n"] if chamadas else 0
             d = desvios["n"] if desvios else 0
             resultado[componente] = {
-                "chamadas": n,
+                "respostas": n,
                 "desvios": d,
                 "pct": round(max(0, n - d) / n * 100, 1) if n else None,
             }
@@ -234,7 +244,7 @@ def exportar_csv(resultados: list, caminho: str) -> int:
 
     os.makedirs(os.path.dirname(caminho) or ".", exist_ok=True)
     colunas = ["tarefa", "cycle_id", "status", "functionality_pct",
-               "iteracoes", "duracao_s", "chamadas_modelo",
+               "iteracoes", "duracao_s", "relatorios_json",
                "desvios_formato", "conformidade_json", "testes_gerados",
                "testes_executados", "testes_passados", "erro"]
     with open(caminho, "w", encoding="utf-8", newline="") as fh:
@@ -243,7 +253,7 @@ def exportar_csv(resultados: list, caminho: str) -> int:
         for r in resultados:
             escritor.writerow([
                 r.tarefa, r.cycle_id, r.status, r.functionality_pct,
-                r.iteracoes, r.duracao_s, r.chamadas_modelo,
+                r.iteracoes, r.duracao_s, r.relatorios_json,
                 r.desvios_formato,
                 "" if r.conformidade_json is None else r.conformidade_json,
                 r.testes_gerados, r.testes_executados, r.testes_passados,

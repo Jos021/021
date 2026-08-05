@@ -220,13 +220,15 @@ def cmd_ml_status() -> None:
         if conformidade:
             lines.append("CONFORMIDADE COM O ESQUEMA JSON (histórico)")
             for comp, info in conformidade.items():
-                if not info["chamadas"]:
-                    lines.append(f"  {comp}: sem chamadas registadas")
+                if not info["respostas"]:
+                    lines.append(
+                        f"  {comp}: sem relatórios JSON registados")
                     continue
                 lines.append(
                     f"  {comp}: {info['pct']}%  "
-                    f"({info['chamadas'] - info['desvios']} válidas em "
-                    f"{info['chamadas']} chamadas, {info['desvios']} desvios)"
+                    f"({info['respostas'] - info['desvios']} válidas em "
+                    f"{info['respostas']} relatórios, "
+                    f"{info['desvios']} desvios)"
                 )
             lines.append("")
 

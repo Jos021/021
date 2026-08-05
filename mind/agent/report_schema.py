@@ -178,20 +178,38 @@ def _do_regex(texto: str) -> Relatorio:
                      via="regex", bruto=texto)
 
 
-def registar_desvio_de_formato(db, cycle_id: int, iteration: int,
-                               component: str, relatorio: Relatorio) -> None:
-    """Regista na SYNAPSE DB que o modelo não respeitou o esquema.
+# Marcadores usados para contar a conformidade a partir da SYNAPSE DB.
+# Ambos contêm a expressão "esquema JSON", o que permite apanhar a população
+# inteira com uma só consulta e os desvios com outra (ver agent/piloto.py).
+MARCA_CONFORME = "Esquema JSON respeitado"
+MARCA_DESVIO = "Modelo não respeitou o esquema JSON"
 
-    Silencioso em caso de falha: um aviso de formato nunca pode derrubar o
-    ciclo. Fica como informação para o piloto com modelos reais.
+
+def registar_conformidade(db, cycle_id: int, iteration: int,
+                          component: str, relatorio: Relatorio) -> None:
+    """Regista se uma resposta respeitou o esquema JSON — respeitando ou não.
+
+    Regista os DOIS desfechos de propósito. Registar só os desvios obrigava
+    quem media a conformidade a inventar um denominador, e o denominador que
+    se usava era o total de chamadas ao modelo — que inclui as chamadas que
+    geram código, anotam marcadores ou aprimoram, e que não têm esquema
+    nenhum para respeitar. Um modelo que nunca produzisse JSON válido
+    aparecia com 78% de conformidade em vez de 0%.
+
+    Com ambos os desfechos registados, o denominador é exactamente a
+    população que tinha um contrato de formato a cumprir. Tem de ser chamada
+    em TODOS os sítios onde um relatório é interpretado — um sítio esquecido
+    volta a enviesar a percentagem.
+
+    Silencioso em caso de falha: um registo de formato nunca pode derrubar
+    o ciclo.
     """
-    if relatorio.formato_respeitado:
-        return
     try:
-        db.log_decision(
-            cycle_id, iteration, component,
-            f"Modelo não respeitou o esquema JSON (via '{relatorio.via}') — "
-            "avaliação lida por recurso.",
-        )
+        if relatorio.formato_respeitado:
+            texto = f"{MARCA_CONFORME} (via '{relatorio.via}')."
+        else:
+            texto = (f"{MARCA_DESVIO} (via '{relatorio.via}') — "
+                     "avaliação lida por recurso.")
+        db.log_decision(cycle_id, iteration, component, texto)
     except Exception:
         pass

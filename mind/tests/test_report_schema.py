@@ -12,7 +12,7 @@ import pytest
 from agent.report_schema import (
     INSTRUCAO_JSON,
     parse_relatorio,
-    registar_desvio_de_formato,
+    registar_conformidade,
 )
 
 BEM_FORMADO = json.dumps({
@@ -112,7 +112,7 @@ def test_entradas_degeneradas_nao_rebentam(texto):
 
 # --- Registo do desvio na SYNAPSE DB -------------------------------------
 def test_desvio_de_formato_e_registado(db, cycle_id):
-    registar_desvio_de_formato(db, cycle_id, 1, "cerebellum",
+    registar_conformidade(db, cycle_id, 1, "cerebellum",
                                parse_relatorio("PCT: 50"))
     decisoes = db._conn.execute(
         "SELECT decision_text FROM decisions WHERE cycle_id = ?", (cycle_id,)
@@ -121,13 +121,39 @@ def test_desvio_de_formato_e_registado(db, cycle_id):
                for d in decisoes)
 
 
-def test_formato_respeitado_nao_gera_aviso(db, cycle_id):
-    registar_desvio_de_formato(db, cycle_id, 1, "cerebellum",
-                               parse_relatorio(BEM_FORMADO))
-    n = db._conn.execute(
-        "SELECT COUNT(*) AS n FROM decisions WHERE cycle_id = ?", (cycle_id,)
+def test_formato_respeitado_tambem_e_registado(db, cycle_id):
+    """Os dois desfechos ficam registados — sem isso não há denominador.
+
+    Registar só os desvios obrigava quem media a conformidade a inventar um
+    denominador, e o que se usava (o total de chamadas ao modelo) incluía
+    chamadas que nem sequer pediam JSON.
+    """
+    registar_conformidade(db, cycle_id, 1, "cerebellum",
+                          parse_relatorio(BEM_FORMADO))
+    decisoes = db._conn.execute(
+        "SELECT decision_text FROM decisions WHERE cycle_id = ?", (cycle_id,)
+    ).fetchall()
+    assert len(decisoes) == 1
+    assert "Esquema JSON respeitado" in decisoes[0]["decision_text"]
+    assert "não respeitou" not in decisoes[0]["decision_text"]
+
+
+def test_os_dois_marcadores_sao_distinguiveis_por_consulta(db, cycle_id):
+    """A população inteira e os desvios têm de sair de consultas separadas."""
+    registar_conformidade(db, cycle_id, 1, "cortex",
+                          parse_relatorio(BEM_FORMADO))
+    registar_conformidade(db, cycle_id, 1, "cortex",
+                          parse_relatorio("PCT: 50"))
+    total = db._conn.execute(
+        "SELECT COUNT(*) AS n FROM decisions WHERE cycle_id = ? "
+        "AND decision_text LIKE '%esquema JSON%'", (cycle_id,)
     ).fetchone()["n"]
-    assert n == 0
+    desvios = db._conn.execute(
+        "SELECT COUNT(*) AS n FROM decisions WHERE cycle_id = ? "
+        "AND decision_text LIKE '%não respeitou o esquema JSON%'", (cycle_id,)
+    ).fetchone()["n"]
+    assert total == 2, "a consulta da população tem de apanhar os dois"
+    assert desvios == 1, "a consulta dos desvios só pode apanhar um"
 
 
 def test_instrucao_json_descreve_todos_os_campos():
