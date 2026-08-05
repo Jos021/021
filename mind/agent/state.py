@@ -50,6 +50,14 @@ class AgentState(TypedDict, total=False):
     best_pct_so_far: float
     best_code_so_far: str
 
+    # --- Sandbox evolutiva -----------------------------------------------
+    generated_tests: list            # testes gerados pelo CEREBELLUM na Fase 1
+    inherited_tests: list            # testes herdados de ciclos anteriores
+    current_test_level: int          # nível de rigor desta iteração (1, 2, 3)
+    test_results_iter: list          # resultados dos testes desta iteração
+    test_breakdown: dict             # breakdown por nível desta iteração
+    tests_to_persist: list           # test_ids a marcar permanentes na aprovação
+
     # --- Saída final -----------------------------------------------------
     final_code: str                  # código final (sem marcadores, sanitizado)
 
@@ -78,5 +86,11 @@ def new_state(task: str, cycle_id: int) -> AgentState:
         status="in_progress",
         best_pct_so_far=0.0,
         best_code_so_far="",
+        generated_tests=[],
+        inherited_tests=[],
+        current_test_level=1,
+        test_results_iter=[],
+        test_breakdown={},
+        tests_to_persist=[],
         final_code="",
     )

@@ -29,6 +29,9 @@ _ENV_CONTROLADAS = [
     "NEURON_TIMEOUT_SECONDS", "ENABLE_ROLLBACK", "GIT_PERMANENT_THRESHOLD",
     "OUTPUT_SANITIZER_ENABLED", "ML_ENABLED", "ML_MIN_TRAINING_SAMPLES",
     "ML_AUTO_REJECT_CONFIDENCE", "ML_RETRAIN_DEVIATION_THRESHOLD",
+    "SANDBOX_TESTS_ENABLED", "SANDBOX_ACCUMULATE_LEVELS",
+    "SANDBOX_MAX_ITER_PER_LEVEL", "SANDBOX_TESTS_PER_LEVEL",
+    "SANDBOX_MIN_LIBRARY_SIMILARITY",
 ] + [f"NEURON_{n}_MODEL" for n in range(1, 7)] \
   + [f"ENABLE_NEURON_{n}" for n in range(1, 7)]
 
@@ -47,6 +50,7 @@ def ambiente_limpo(monkeypatch, tmp_path):
     monkeypatch.setenv("APPROVAL_THRESHOLD", "98")
     monkeypatch.setenv("MUNDJI_SANDBOX_TIMEOUT", "15")
     monkeypatch.setenv("ML_ENABLED", "false")
+    monkeypatch.setenv("SANDBOX_TESTS_ENABLED", "false")
     yield
 
 

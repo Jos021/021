@@ -107,6 +107,40 @@ class Cerebellum:
             full_output=out, duration_seconds=time.time() - t0,
         )
         self._log("Fase 1: avaliação do código base concluída.")
+        return self._gerar_testes(state)
+
+    def _gerar_testes(self, state: dict) -> dict:
+        """Gera os testes dos 3 níveis na transição Fase 1 -> Fase 2.
+
+        É o CEREBELLUM que gera os testes pelos quais o CORTEX vai ser
+        avaliado — separação deliberada. Com SANDBOX_TESTS_ENABLED=false não
+        se faz chamada nenhuma e o estado fica exactamente como antes.
+        """
+        from .test_generator import TestGenerator, sandbox_tests_enabled
+
+        if not sandbox_tests_enabled():
+            return state
+
+        gerador = TestGenerator(self.router, self.db, self.hippocampus)
+        testes = gerador.generate(
+            task=state.get("task", ""),
+            base_code=state.get("base_code", ""),
+            markers=state.get("markers", {}),
+            cycle_id=state["cycle_id"],
+        )
+        herdados = [t for t in testes if t.get("times_used") is not None]
+        novos = [t for t in testes if t.get("times_used") is None]
+        state["generated_tests"] = testes
+        state["inherited_tests"] = herdados
+
+        self.db.log_decision(
+            state["cycle_id"], state["iteration"], "cerebellum",
+            f"Gerados {len(novos)} testes novos e herdados {len(herdados)} "
+            "de ciclos aprovados anteriores.",
+        )
+        self._log(
+            f"Fase 1: {len(novos)} testes gerados, {len(herdados)} herdados."
+        )
         return state
 
     # ================================================================
@@ -193,6 +227,7 @@ class Cerebellum:
         state["cerebellum_report"] = cere_report
 
         avaliacao = parse_relatorio(cere_report)
+        state["_formato_respeitado"] = avaliacao.formato_respeitado
         registar_desvio_de_formato(
             self.db, state["cycle_id"], state["iteration"], "cerebellum",
             avaliacao,
@@ -231,10 +266,21 @@ class Cerebellum:
             # Validação cruzada normal: média das duas estimativas.
             final_pct = (pct_cortex + pct_cere) / 2 if (pct_cortex or pct_cere) else 0.0
 
+        # Sandbox evolutiva: com testes reais, a percentagem deixa de ser uma
+        # estimativa do modelo e passa a ser medida sobre resultados.
+        final_pct = self._pct_sobre_testes_reais(state, final_pct)
+
         # Penalização por marcadores órfãos por preencher no código organizado.
         final_pct = self._penalize_orphan_markers(state, final_pct)
 
         state["functionality_pct"] = final_pct
+        # O modelo pode indicar testes a persistir; junta-se aos que o runner
+        # executou, sem duplicar.
+        if avaliacao.tests_to_persist:
+            ja = set(state.get("tests_to_persist") or [])
+            state["tests_to_persist"] = list(
+                ja | set(avaliacao.tests_to_persist)
+            )
         improvements = avaliacao.improvements
         state["improvements"] = improvements
 
@@ -345,6 +391,37 @@ class Cerebellum:
                 cycle_id, state.get("iteration", 0), "cerebellum",
                 ml.get("prediction"), str(final_pct),
             )
+
+    def _pct_sobre_testes_reais(self, state: dict, pct_estimada: float) -> float:
+        """Substitui a estimativa do modelo pela medição sobre testes reais.
+
+        Fórmula: nível 1 completo = 33%, nível 2 = 66% acumulado, nível 3 =
+        99%, mais 1% para a qualidade do relatório — que é a única parte que
+        continua a ser um juízo do CEREBELLUM, e por isso vale 1% e não mais.
+
+        Se a sandbox evolutiva estiver desligada, ou se não houver breakdown
+        (nenhum teste correu), devolve a estimativa como antes.
+        """
+        from .test_generator import sandbox_tests_enabled
+        from .test_runner import calcular_percentagem
+
+        if not sandbox_tests_enabled():
+            return pct_estimada
+        breakdown = state.get("test_breakdown") or {}
+        if not any((breakdown.get(f"level_{n}") or {}).get("total")
+                   for n in (1, 2, 3)):
+            return pct_estimada
+
+        # A qualidade do relatório vale 1%: atribui-se por o modelo ter
+        # respeitado o esquema JSON, que é o que se consegue verificar.
+        qualidade = 1.0 if state.get("_formato_respeitado") else 0.0
+        medida = calcular_percentagem(breakdown, qualidade)
+        self.db.log_decision(
+            state["cycle_id"], state["iteration"], "cerebellum",
+            f"Percentagem medida sobre testes reais: {medida:.1f}% "
+            f"(estimativa do modelo era {pct_estimada:.1f}%).",
+        )
+        return medida
 
     def _penalize_orphan_markers(self, state: dict, pct: float) -> float:
         """Reduz a % se sobrarem marcadores órfãos por preencher.

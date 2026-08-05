@@ -291,6 +291,12 @@ class MindGraph:
         self.neurons = build_neurons(router, db, specialties)
         self.max_iterations = int(os.getenv("MUNDJI_MAX_ITERATIONS", "10"))
         self.neuron_timeout = float(os.getenv("NEURON_TIMEOUT_SECONDS", "60"))
+        # Sandbox evolutiva: quantas iterações se insiste no mesmo nível.
+        self.max_iter_por_nivel = int(
+            os.getenv("SANDBOX_MAX_ITER_PER_LEVEL", "3")
+        )
+        self._iters_no_nivel = 0
+        self._nivel_observado = None
         workspace = os.getenv("MUNDJI_WORKSPACE", "./workspace")
         self.git = GitVersioner(workspace)
         self.workspace = workspace
@@ -371,6 +377,9 @@ class MindGraph:
                 f"{relatorio['commits_antes']} -> {relatorio['commits_depois']} "
                 f"commits ({relatorio['descartados']} temporários removidos)."
             )
+        # Sandbox evolutiva: os testes usados num ciclo aprovado passam a
+        # estar disponíveis para ciclos futuros com tarefas semelhantes.
+        self.db.mark_tests_permanent(state.get("tests_to_persist") or [])
         self.db.update_cycle(state["cycle_id"], status="approved", final_pct=pct)
         return state
 
@@ -404,7 +413,50 @@ class MindGraph:
             return "aprovar"
         if state.get("iteration", 0) >= self.max_iterations:
             return "desistir"
+        if self._nivel_estagnado(state):
+            return "desistir"
         return "melhorar"
+
+    def _nivel_estagnado(self, state: dict) -> bool:
+        """Limite por nível da sandbox evolutiva.
+
+        Se ao fim de SANDBOX_MAX_ITER_PER_LEVEL iterações o nível actual não
+        foi completamente superado, passa-se a needs_human com a razão
+        registada, em vez de insistir indefinidamente no mesmo nível. O
+        histórico git mantém-se intacto, como em qualquer needs_human.
+        """
+        from .test_generator import sandbox_tests_enabled
+        from .test_runner import nivel_completo
+
+        if not sandbox_tests_enabled():
+            return False
+        breakdown = state.get("test_breakdown") or {}
+        if not breakdown:
+            return False
+
+        nivel = state.get("current_test_level", 1)
+        if nivel_completo(breakdown, nivel):
+            self._iters_no_nivel = 0
+            self._nivel_observado = nivel
+            return False
+
+        if getattr(self, "_nivel_observado", None) != nivel:
+            self._nivel_observado = nivel
+            self._iters_no_nivel = 0
+        self._iters_no_nivel = getattr(self, "_iters_no_nivel", 0) + 1
+
+        if self._iters_no_nivel >= self.max_iter_por_nivel:
+            razao = (
+                f"Nível {nivel} não superado ao fim de "
+                f"{self._iters_no_nivel} iterações — needs_human."
+            )
+            self.db.log_decision(
+                state["cycle_id"], state.get("iteration", 0), "cortex", razao
+            )
+            if self.console:
+                self.console.print(f"[bold yellow]MIND[/] {razao}")
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # Construção do grafo

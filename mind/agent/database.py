@@ -85,6 +85,39 @@ CREATE TABLE IF NOT EXISTS ml_model_versions (
     training_samples_count INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS test_library (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    test_id TEXT UNIQUE NOT NULL,
+    cycle_id INTEGER NOT NULL,
+    task_embedding TEXT,             -- JSON: embedding da tarefa de origem
+    task_summary TEXT NOT NULL,
+    neuron_target TEXT NOT NULL,
+    language TEXT NOT NULL,
+    level INTEGER NOT NULL,          -- 1 (básico), 2 (limite), 3 (erro)
+    category TEXT NOT NULL,          -- basic, edge, error
+    description TEXT NOT NULL,
+    code TEXT NOT NULL,
+    expected_outcome TEXT NOT NULL,
+    times_used INTEGER DEFAULT 0,
+    times_passed INTEGER DEFAULT 0,
+    times_failed INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (cycle_id) REFERENCES cycles(id)
+);
+
+CREATE TABLE IF NOT EXISTS test_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle_id INTEGER NOT NULL,
+    iteration_number INTEGER NOT NULL,
+    test_id TEXT NOT NULL,
+    outcome TEXT NOT NULL,           -- pass, fail, error, timeout
+    output TEXT,                     -- output real da sandbox
+    duration_seconds REAL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (cycle_id) REFERENCES cycles(id),
+    FOREIGN KEY (test_id) REFERENCES test_library(test_id)
+);
+
 CREATE TABLE IF NOT EXISTS ml_predictions_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cycle_id INTEGER NOT NULL,
@@ -442,6 +475,163 @@ class SynapseDB:
                 continue
             deltas.append(abs(float(row["prediction"]) - actual))
         return sum(deltas) / len(deltas) if deltas else None
+
+    # ======================================================================
+    # SANDBOX EVOLUTIVA — biblioteca de testes e resultados
+    # ======================================================================
+    def save_test(self, test: dict) -> None:
+        """Guarda um teste na test_library.
+
+        Se o test_id já existir, ignora (INSERT OR IGNORE) — um teste
+        herdado de um ciclo anterior é reutilizado, não duplicado.
+        """
+        with self._lock:
+            self._conn.execute(
+                """INSERT OR IGNORE INTO test_library
+                   (test_id, cycle_id, task_embedding, task_summary,
+                    neuron_target, language, level, category, description,
+                    code, expected_outcome)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    test.get("test_id"),
+                    test.get("cycle_id"),
+                    json.dumps(test["task_embedding"], ensure_ascii=False)
+                    if test.get("task_embedding") else None,
+                    test.get("task_summary", ""),
+                    test.get("neuron_target", "all"),
+                    test.get("language", "python"),
+                    int(test.get("level", 1)),
+                    test.get("category", "basic"),
+                    test.get("description", ""),
+                    test.get("code", ""),
+                    test.get("expected_outcome", "pass"),
+                ),
+            )
+            self._conn.commit()
+
+    def record_test_result(self, result: dict) -> None:
+        """Regista uma execução de teste na test_results.
+
+        Actualiza times_used e times_passed ou times_failed na test_library
+        conforme o outcome. Um teste que dá 'error' ou 'timeout' conta como
+        falhado — não passou, e é isso que interessa à estatística.
+        """
+        outcome = result.get("outcome", "error")
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO test_results
+                   (cycle_id, iteration_number, test_id, outcome, output,
+                    duration_seconds)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (result.get("cycle_id"), result.get("iteration_number", 0),
+                 result.get("test_id"), outcome, result.get("output", ""),
+                 result.get("duration_seconds", 0.0)),
+            )
+            coluna = "times_passed" if outcome == "pass" else "times_failed"
+            self._conn.execute(
+                f"""UPDATE test_library
+                    SET times_used = times_used + 1,
+                        {coluna} = {coluna} + 1
+                    WHERE test_id = ?""",
+                (result.get("test_id"),),
+            )
+            self._conn.commit()
+
+    def get_tests_for_cycle(self, cycle_id: int, level: Optional[int] = None) -> list:
+        """Devolve os testes de um ciclo, com filtro opcional por nível."""
+        query = "SELECT * FROM test_library WHERE cycle_id = ?"
+        params: list = [cycle_id]
+        if level is not None:
+            query += " AND level = ?"
+            params.append(level)
+        query += " ORDER BY level, id"
+        with self._lock:
+            rows = self._conn.execute(query, params).fetchall()
+        return [self._linha_para_teste(r) for r in rows]
+
+    def get_tests_by_embedding(
+        self,
+        embedding: Optional[list],
+        min_similarity: float = 0.75,
+        limit: int = 8,
+    ) -> list:
+        """Consulta a test_library por similaridade cosseno.
+
+        Só devolve testes de ciclos APROVADOS: herdar testes de um ciclo que
+        nunca passou seria propagar critérios que ainda não se provaram.
+
+        Se `embedding` for None, se não houver testes, ou se o cálculo
+        falhar: devolve lista vazia sem lançar excepção.
+        """
+        if not embedding:
+            return []
+        try:
+            from .ml_features import cosine_similarity
+
+            with self._lock:
+                rows = self._conn.execute(
+                    """SELECT t.* FROM test_library t
+                       JOIN cycles c ON c.id = t.cycle_id
+                       WHERE c.status = 'approved'
+                         AND t.task_embedding IS NOT NULL"""
+                ).fetchall()
+
+            pontuados = []
+            for row in rows:
+                try:
+                    guardado = json.loads(row["task_embedding"])
+                except (ValueError, TypeError):
+                    continue
+                sim = cosine_similarity(embedding, guardado)
+                if sim >= min_similarity:
+                    pontuados.append((sim, row))
+            pontuados.sort(key=lambda par: par[0], reverse=True)
+            return [self._linha_para_teste(r) for _, r in pontuados[:limit]]
+        except Exception:
+            return []
+
+    def mark_tests_permanent(self, test_ids: list) -> None:
+        """Incrementa times_used nos testes listados.
+
+        Chamado quando um ciclo é aprovado: marca que aqueles testes fizeram
+        parte de um resultado validado.
+        """
+        if not test_ids:
+            return
+        try:
+            with self._lock:
+                self._conn.executemany(
+                    "UPDATE test_library SET times_used = times_used + 1 "
+                    "WHERE test_id = ?",
+                    [(tid,) for tid in test_ids],
+                )
+                self._conn.commit()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _linha_para_teste(row) -> dict:
+        """Converte uma linha da test_library num teste utilizável."""
+        try:
+            embedding = json.loads(row["task_embedding"]) if row["task_embedding"] else None
+        except (ValueError, TypeError):
+            embedding = None
+        return {
+            "test_id": row["test_id"],
+            "cycle_id": row["cycle_id"],
+            "task_embedding": embedding,
+            "task_summary": row["task_summary"],
+            "neuron_target": row["neuron_target"],
+            "language": row["language"],
+            "level": row["level"],
+            "category": row["category"],
+            "description": row["description"],
+            "code": row["code"],
+            "expected_outcome": row["expected_outcome"],
+            "times_used": row["times_used"],
+            "times_passed": row["times_passed"],
+            "times_failed": row["times_failed"],
+        }
 
     def close(self) -> None:
         with self._lock:

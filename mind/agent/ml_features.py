@@ -85,6 +85,72 @@ def _hash_embedding(text: str, dim: int = _FALLBACK_EMBEDDING_DIM) -> list:
     return [v / norm for v in vec] if norm else vec
 
 
+# Dimensão fixa dos embeddings de tarefa guardados na test_library. É a do
+# all-MiniLM-L6-v2; o fallback determinístico enche o resto com zeros para
+# que a distância cosseno funcione entre vectores das duas origens.
+EMBEDDING_DIM = 384
+
+
+def embed_task(task: str) -> list | None:
+    """Gera um embedding da descrição da tarefa, com 384 dimensões.
+
+    COM sentence-transformers disponível:
+        modelo leve (all-MiniLM-L6-v2), vector de 384 dimensões.
+
+    SEM sentence-transformers (caso inicial, ML_ENABLED=false):
+        usa o hashing determinístico já existente neste módulo, enchendo
+        as posições restantes com zeros para manter a compatibilidade com
+        a distância cosseno. Menos preciso semanticamente, mas funcional
+        para recuperação aproximada — e é o que permite a biblioteca de
+        testes crescer antes de haver camada de ML.
+
+    Se tudo falhar, devolve None sem lançar. O código chamador guarda
+    task_embedding=None nesse caso, e get_tests_by_embedding trata None
+    como lista vazia.
+    """
+    if not task:
+        return None
+    model = _get_sentence_model()
+    if model is not None:
+        try:
+            vector = [float(x) for x in model.encode(task)]
+            if vector:
+                return _ajustar_dimensao(vector)
+        except Exception:
+            pass  # cai para o fallback determinístico
+    try:
+        return _ajustar_dimensao(_hash_embedding(task, dim=EMBEDDING_DIM))
+    except Exception:
+        return None
+
+
+def _ajustar_dimensao(vector: list, dim: int = EMBEDDING_DIM) -> list:
+    """Trunca ou enche com zeros até à dimensão fixa."""
+    if len(vector) >= dim:
+        return vector[:dim]
+    return vector + [0.0] * (dim - len(vector))
+
+
+def cosine_similarity(a: list, b: list) -> float:
+    """Similaridade cosseno entre dois vectores.
+
+    Devolve 0.0 se qualquer dos vectores for None, vazio, de comprimentos
+    incompatíveis, ou de norma nula — nunca lança.
+    """
+    if not a or not b:
+        return 0.0
+    try:
+        n = min(len(a), len(b))
+        produto = sum(float(a[i]) * float(b[i]) for i in range(n))
+        norma_a = math.sqrt(sum(float(x) * float(x) for x in a[:n]))
+        norma_b = math.sqrt(sum(float(x) * float(x) for x in b[:n]))
+        if norma_a == 0 or norma_b == 0:
+            return 0.0
+        return produto / (norma_a * norma_b)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def task_keywords(task: str) -> dict:
     """Presença (0/1) de cada palavra-chave técnica na tarefa."""
     lowered = (task or "").lower()

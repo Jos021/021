@@ -168,6 +168,27 @@ class Cortex:
             "— a decisão é tua):\n" + result.get("suggestion", "") + "\n"
         )
 
+    def _restricoes_dos_testes(self, state: dict) -> str:
+        """Testes do CEREBELLUM como restrições ao refinar o código base.
+
+        O CORTEX sabe, antes de distribuir aos NEURONS, que o resultado terá
+        de passar aqueles testes específicos. Não os gerou — só os conhece.
+        """
+        testes = state.get("generated_tests") or []
+        if not testes:
+            return ""
+        linhas = [
+            f"- [nível {t.get('level', 1)}] {t.get('description', '')}"
+            for t in testes[:30] if t.get("description")
+        ]
+        if not linhas:
+            return ""
+        return (
+            "\n\nO CEREBELLUM já definiu os testes que o resultado final terá "
+            "de passar. Refina o código base tendo-os como restrição:\n"
+            + "\n".join(linhas) + "\n"
+        )
+
     # --- Utilitário de geração -------------------------------------------
     def _generate(self, prompt: str, timeout: float = 120.0,
                   state: dict = None) -> str:
@@ -234,6 +255,7 @@ class Cortex:
             "Feedback do CEREBELLUM:\n" + feedback + "\n\n"
             "Aprimora o código base tendo em conta o feedback. Devolve só "
             "o código base aprimorado."
+            + self._restricoes_dos_testes(state)
             + self._hippocampus_hint(state)
         )
         out = self._generate(prompt, state=state)
@@ -483,6 +505,11 @@ class Cortex:
                 f"stdout: {res.stdout[:500]}\nstderr: {res.stderr[:500]}"
             )
         state["test_results"] = "\n---\n".join(results)
+
+        # Sandbox evolutiva: executar os testes estruturados do nível desta
+        # iteração. Desligada, este bloco não corre e tudo fica como antes.
+        state = self._correr_testes_estruturados(state)
+
         self.db.log_iteration(
             state["cycle_id"], state["iteration"], "3", "cortex",
             input_summary="executar sandbox",
@@ -490,6 +517,61 @@ class Cortex:
             full_output=state["test_results"], duration_seconds=time.time() - t0,
         )
         self._log("Fase 3: testes executados na sandbox.")
+        return state
+
+    def _correr_testes_estruturados(self, state: dict) -> dict:
+        """Corre os testes gerados pelo CEREBELLUM, do nível desta iteração.
+
+        O nível é determinado pelo número de iterações já completadas:
+        iteração 1 -> nível 1, iteração 2 -> nível 2, iteração 3+ -> nível 3.
+        """
+        from .test_generator import sandbox_tests_enabled
+        from .test_runner import TestRunner, seleccionar_testes
+
+        if not sandbox_tests_enabled():
+            return state
+
+        nivel = min(max(1, state.get("iteration", 1)), 3)
+        state["current_test_level"] = nivel
+
+        todos = state.get("generated_tests") or []
+        do_nivel = seleccionar_testes(todos, nivel)
+        if not do_nivel:
+            state["test_breakdown"] = {}
+            state["test_results_iter"] = []
+            return state
+
+        breakdown = TestRunner(self.db).run_tests(
+            do_nivel, state["cycle_id"], state.get("iteration", 0)
+        )
+        resultados = breakdown.pop("results", [])
+        state["test_breakdown"] = breakdown
+        state["test_results_iter"] = resultados
+        state["tests_to_persist"] = [
+            t.get("test_id") for t in do_nivel if t.get("test_id")
+        ]
+
+        # Os resultados reais entram no relatório em texto, para que ambos os
+        # modelos vejam a mesma evidência na validação cruzada.
+        resumo = [
+            f"[nível {n}] {breakdown[f'level_{n}']['passed']}/"
+            f"{breakdown[f'level_{n}']['total']} passaram "
+            f"({breakdown[f'level_{n}']['pct']}%)"
+            for n in (1, 2, 3) if breakdown.get(f"level_{n}", {}).get("total")
+        ]
+        falhados = [
+            f"  - {r.get('test_id', '')[:8]}: {r['outcome']}"
+            for r in resultados if r["outcome"] != "pass"
+        ][:20]
+        state["test_results"] += (
+            "\n---\nTESTES ESTRUTURADOS (nível " + str(nivel) + ")\n"
+            + "\n".join(resumo)
+            + ("\nFalhados:\n" + "\n".join(falhados) if falhados else "")
+        )
+        self._log(
+            f"Fase 3: nível {nivel} — " + "; ".join(resumo) if resumo
+            else f"Fase 3: nível {nivel} sem testes."
+        )
         return state
 
     def report(self, state: dict) -> dict:

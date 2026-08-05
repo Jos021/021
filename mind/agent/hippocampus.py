@@ -173,6 +173,42 @@ class Hippocampus:
         return None
 
     # ------------------------------------------------------------------
+    # Sandbox evolutiva — recuperação de testes de ciclos anteriores
+    # ------------------------------------------------------------------
+    def recommend_tests(
+        self,
+        task_embedding: list,
+        limit: int = 8,
+        min_similarity: float = 0.75,
+    ) -> list:
+        """Testes mais relevantes de ciclos anteriores APROVADOS.
+
+        Consulta a test_library por similaridade de embedding. Se
+        ML_ENABLED=false, se não houver modelo activo, ou se task_embedding
+        for None, delega directamente em db.get_tests_by_embedding() com o
+        embedding determinístico — a consulta por embedding funciona
+        independentemente de ML_ENABLED, e é isso que permite a biblioteca
+        crescer desde o primeiro ciclo, antes de haver camada de ML.
+
+        CAMINHO FUTURO: quando o HIPPOCAMPUS tiver modelo de ML activo com
+        histórico suficiente, esta chamada passará a incluir também um
+        ranking por qualidade histórica (taxa de pass/fail em tarefas
+        semelhantes), e não apenas por similaridade de embedding. Os campos
+        times_used/times_passed/times_failed da test_library existem
+        precisamente para alimentar esse ranking quando chegar a altura.
+
+        Nunca lança excepção. Se algo falhar, devolve lista vazia.
+        """
+        try:
+            if not task_embedding:
+                return []
+            return self.db.get_tests_by_embedding(
+                task_embedding, min_similarity, limit
+            )
+        except Exception:
+            return []
+
+    # ------------------------------------------------------------------
     # Carregamento de modelos
     # ------------------------------------------------------------------
     def _load_model(self, consumer: str):
