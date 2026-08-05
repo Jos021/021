@@ -20,3 +20,4 @@ distingue vários relatórios do mesmo dia.
 | `Relatorio_MIND_2026-08-03_03_fecho_de_lacunas.pdf` | Pontos 2 a 6: diff de contrato, limpeza git, decisão LangGraph, esquema JSON (commit `7c6d807`) |
 | `Relatorio_MIND_2026-08-03_04_huggingface_gpu_alugada.pdf` | Router para HuggingFace em GPU alugada e avaliação sobre modelos retreinados (commit `deec79d`) |
 | `Relatorio_MIND_2026-08-03_05_sandbox_evolutiva.pdf` | Sandbox de testes evolutiva — instruções 45-61 (commit `06a57a6`) |
+| `Relatorio_MIND_2026-08-03_06_preparacao_do_piloto.pdf` | Ferramenta de verificação e medição com modelos reais (commit `a143abf`) |
