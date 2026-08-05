@@ -21,3 +21,4 @@ distingue vários relatórios do mesmo dia.
 | `Relatorio_MIND_2026-08-03_04_huggingface_gpu_alugada.pdf` | Router para HuggingFace em GPU alugada e avaliação sobre modelos retreinados (commit `deec79d`) |
 | `Relatorio_MIND_2026-08-03_05_sandbox_evolutiva.pdf` | Sandbox de testes evolutiva — instruções 45-61 (commit `06a57a6`) |
 | `Relatorio_MIND_2026-08-03_06_preparacao_do_piloto.pdf` | Ferramenta de verificação e medição com modelos reais (commit `a143abf`) |
+| `Relatorio_MIND_2026-08-03_07_ensaio_do_runbook.pdf` | Ensaio das 4 passagens sem GPU; discrepância do `ml-status` corrigida (commit `de9e0a1`) |
