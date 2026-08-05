@@ -116,7 +116,9 @@ def call_model_with_retry(
     """
     last_error = ""
     wait = backoff
+    tentativas_feitas = 0
     for attempt in range(1, max_retries + 1):
+        tentativas_feitas = attempt
         try:
             return _despachar(mode, endpoint, model, prompt, system,
                               api_key, timeout)
@@ -125,9 +127,9 @@ def call_model_with_retry(
             # Só faz retry em erros transitórios (5xx / conexão / timeout).
             status = getattr(getattr(exc, "response", None), "status_code", None)
             if status is not None and status < 500 and status != 429:
-                last_error = f"Erro não recuperável {status}: {exc}"
+                last_error = f"Erro não recuperável {status}: {_detalhe(exc)}"
                 break
-            last_error = str(exc)
+            last_error = _detalhe(exc)
             if attempt < max_retries:
                 time.sleep(wait)
                 wait *= 2  # 2s -> 4s -> 8s
@@ -155,9 +157,45 @@ def call_model_with_retry(
             )
         except Exception:
             pass  # nunca deixar o logging derrubar a chamada
-    raise ModelError(
-        component, f"Todas as {max_retries} tentativas falharam: {last_error}"
-    )
+    # O número reportado é o de tentativas REALMENTE feitas: um erro não
+    # recuperável sai à primeira, e dizer "todas as 3 falharam" faria supor
+    # que houve insistência que não houve.
+    contagem = ("1 tentativa falhou" if tentativas_feitas == 1
+                else f"{tentativas_feitas} tentativas falharam")
+    raise ModelError(component, f"{contagem}: {last_error}")
+
+
+def _detalhe(exc: Exception) -> str:
+    """Mensagem de erro com o corpo da resposta, quando a API o dá.
+
+    Sem isto perde-se a única informação que interessa. Um 400 da API da
+    Anthropic por falta de saldo e um 400 por modelo inexistente são o mesmo
+    "Client error '400 Bad Request'" para o httpx — a diferença está no
+    corpo, que o raise_for_status descarta. O `verificar` existe para dizer
+    ao operador o que está errado antes de se gastar dinheiro; sem o corpo
+    não diz nada de útil.
+
+    Cobre os formatos das APIs que o router fala: {"error": {"message": …}}
+    (Anthropic e compatíveis com OpenAI) e {"error": "…"} (Ollama).
+    """
+    resposta = getattr(exc, "response", None)
+    if resposta is None:
+        return str(exc)
+    try:
+        erro = resposta.json().get("error")
+    except Exception:
+        erro = None
+    detalhe = ""
+    if isinstance(erro, dict):
+        detalhe = str(erro.get("message") or "")
+    elif isinstance(erro, str):
+        detalhe = erro
+    if not detalhe:
+        # Sem JSON reconhecível, o texto cru ainda é melhor do que nada.
+        detalhe = (getattr(resposta, "text", "") or "").strip()
+    if not detalhe:
+        return str(exc)
+    return detalhe[:400]
 
 
 def _despachar(mode, endpoint, model, prompt, system, api_key, timeout) -> str:

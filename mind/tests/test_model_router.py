@@ -408,6 +408,89 @@ def test_sem_cycle_id_nao_tenta_registar(db, monkeypatch):
         "SELECT COUNT(*) AS n FROM iterations").fetchone()["n"] == 0
 
 
+# --- Diagnóstico: o que a mensagem de erro tem de dizer --------------------
+# Estes dois testes nasceram de uma falha real. Um 400 da Anthropic por falta
+# de saldo apareceu ao operador como "Client error '400 Bad Request'" e um
+# link para a documentação da Mozilla — a razão verdadeira estava no corpo da
+# resposta, que era deitado fora. O `verificar` existe para dizer o que está
+# errado antes de se gastar dinheiro.
+class _RespostaComCorpo(_Resposta):
+    def __init__(self, dados, status=400, texto=""):
+        super().__init__(dados, status)
+        self.text = texto
+
+
+def test_erro_reporta_a_mensagem_da_api(monkeypatch):
+    """O corpo do erro é a única informação que interessa — não se descarta."""
+    corpo = {"type": "error", "error": {
+        "type": "invalid_request_error",
+        "message": "Your credit balance is too low to access the "
+                   "Anthropic API."}}
+    monkeypatch.setattr(httpx, "post",
+                        lambda *a, **k: _RespostaComCorpo(corpo))
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    with pytest.raises(ModelError) as exc:
+        call_model_with_retry("https://api.anthropic.com", "m", "p",
+                              mode="anthropic", max_retries=3)
+    assert "credit balance is too low" in str(exc.value)
+
+
+def test_erro_em_formato_ollama_tambem_e_lido(monkeypatch):
+    """O Ollama usa {"error": "..."} em vez de {"error": {"message": ...}}."""
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _RespostaComCorpo(
+        {"error": "model 'inexistente' not found"}))
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    with pytest.raises(ModelError) as exc:
+        call_model_with_retry("http://localhost:11434", "inexistente", "p",
+                              mode="ollama", max_retries=1)
+    assert "not found" in str(exc.value)
+
+
+def test_corpo_sem_json_cai_no_texto_cru(monkeypatch):
+    class _Html(_Resposta):
+        text = "<html>502 Bad Gateway</html>"
+
+        def json(self):
+            raise ValueError("não é JSON")
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Html({}, status=400))
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    with pytest.raises(ModelError) as exc:
+        call_model_with_retry("https://gpu:8000", "m", "p",
+                              mode="openai_compat", max_retries=1)
+    assert "502 Bad Gateway" in str(exc.value)
+
+
+def test_mensagem_conta_as_tentativas_realmente_feitas(monkeypatch):
+    """Um 400 sai à primeira: dizer "todas as 3 falharam" seria mentira."""
+    tentativas = []
+
+    def falso_post(*a, **k):
+        tentativas.append(1)
+        return _Resposta({}, status=400)
+
+    monkeypatch.setattr(httpx, "post", falso_post)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    with pytest.raises(ModelError) as exc:
+        call_model_with_retry("https://gpu:8000", "m", "p",
+                              mode="openai_compat", max_retries=3)
+    assert len(tentativas) == 1
+    assert "1 tentativa falhou" in str(exc.value)
+    assert "3 tentativas" not in str(exc.value)
+
+
+def test_mensagem_conta_as_tres_quando_houve_tres(monkeypatch):
+    """O contrário também: um erro transitório insiste, e diz que insistiu."""
+    monkeypatch.setattr(httpx, "post",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            httpx.ConnectError("sem rede")))
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    with pytest.raises(ModelError) as exc:
+        call_model_with_retry("https://gpu:8000", "m", "p",
+                              mode="openai_compat", max_retries=3)
+    assert "3 tentativas" in str(exc.value)
+
+
 def test_erro_estruturado_nomeia_o_componente(monkeypatch):
     monkeypatch.setattr(httpx, "post",
                         lambda *a, **k: (_ for _ in ()).throw(
