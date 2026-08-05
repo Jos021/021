@@ -277,7 +277,21 @@ def _call_anthropic(
         payload["system"] = system
     resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
     resp.raise_for_status()
-    blocos = resp.json().get("content") or []
+    dados = resp.json()
+
+    # Truncagem em max_tokens não é um erro para a API: devolve 200 com o
+    # texto cortado a meio. Deixar passar seria pior do que falhar — o
+    # código incompleto iria à sandbox, não compilaria, e o CEREBELLUM
+    # reprovaria a iteração pela razão errada. O piloto mediria a qualidade
+    # do modelo quando o problema era o tecto de tokens.
+    if dados.get("stop_reason") == "max_tokens":
+        raise RuntimeError(
+            f"resposta truncada: bateu no tecto de {ANTHROPIC_MAX_TOKENS} "
+            "tokens (ANTHROPIC_MAX_TOKENS em agent/model_router.py). O texto "
+            "devolvido estava incompleto e foi descartado."
+        )
+
+    blocos = dados.get("content") or []
     for bloco in blocos:
         if isinstance(bloco, dict) and bloco.get("type") == "text":
             return bloco.get("text", "")

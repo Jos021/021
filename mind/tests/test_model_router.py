@@ -257,6 +257,48 @@ def test_modo_anthropic_ignora_blocos_que_nao_sao_texto(monkeypatch):
                                  mode="anthropic") == "o que interessa"
 
 
+def test_modo_anthropic_recusa_resposta_truncada(monkeypatch):
+    """stop_reason=max_tokens vem com 200 e texto cortado — não é sucesso.
+
+    Se passasse, o código incompleto ia à sandbox e o CEREBELLUM reprovaria
+    a iteração pela razão errada.
+    """
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resposta({
+        "stop_reason": "max_tokens",
+        "content": [{"type": "text", "text": "def f(x):\n    retur"}]}))
+    with pytest.raises(ModelError) as exc:
+        call_model_with_retry("https://api.anthropic.com", "m", "p",
+                              mode="anthropic", max_retries=3)
+    assert "truncada" in str(exc.value)
+    assert "4096" in str(exc.value)
+
+
+def test_truncagem_nao_e_repetida(monkeypatch):
+    """Repetir uma truncagem dá exactamente a mesma truncagem."""
+    tentativas = []
+
+    def falso_post(*a, **k):
+        tentativas.append(1)
+        return _Resposta({"stop_reason": "max_tokens",
+                          "content": [{"type": "text", "text": "cortado"}]})
+
+    monkeypatch.setattr(httpx, "post", falso_post)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    with pytest.raises(ModelError):
+        call_model_with_retry("https://api.anthropic.com", "m", "p",
+                              mode="anthropic", max_retries=3)
+    assert len(tentativas) == 1
+
+
+def test_stop_reason_normal_passa(monkeypatch):
+    """end_turn é o caso bom e não pode ser afectado."""
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resposta({
+        "stop_reason": "end_turn",
+        "content": [{"type": "text", "text": "completo"}]}))
+    assert call_model_with_retry("https://api.anthropic.com", "m", "p",
+                                 mode="anthropic") == "completo"
+
+
 def test_endpoint_por_omissao_do_modo_anthropic(monkeypatch):
     """Com MODEL_MODE=anthropic e MODEL_ENDPOINT ausente, usa a API pública."""
     monkeypatch.setenv("MODEL_MODE", "anthropic")
