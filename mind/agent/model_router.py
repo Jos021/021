@@ -21,14 +21,19 @@ MODOS (MODEL_MODE)
                  torch só é carregado se este modo for usado.
   hf_api         HuggingFace Inference API / Inference Endpoints (remoto).
   ollama         Mantido para compatibilidade com instalações locais.
+  anthropic      API da Anthropic directamente, sem proxy intermédio. O
+                 formato do pedido difere do openai_compat em quatro
+                 pontos — ver _call_anthropic.
 
 --------------------------------------------------------------------------
-NOTA DE SEGURANÇA — GPU alugada
+NOTA DE SEGURANÇA — inferência remota
 --------------------------------------------------------------------------
 Quando os modelos correm em GPU alugada (vast.ai e afins), os prompts e o
 código gerado saem do hardware do utilizador. O princípio "tudo local" da
 SYNAPSE DB mantém-se — a base de dados nunca sai — mas a inferência deixa
-de ser local, e isso é uma cedência consciente, não um descuido.
+de ser local, e isso é uma cedência consciente, não um descuido. O modo
+anthropic tem exactamente a mesma natureza: os prompts vão para um serviço
+de terceiros.
 
 Mitigações previstas no código: token por componente (MODEL_AUTH_TOKEN ou
 NEURON_N_TOKEN), verificação de TLS activa por omissão, e recomendação de
@@ -50,7 +55,18 @@ from typing import Optional
 
 import httpx
 
-MODOS = ("openai_compat", "hf_local", "hf_api", "ollama")
+MODOS = ("openai_compat", "hf_local", "hf_api", "ollama", "anthropic")
+
+# Endpoint da API da Anthropic. É fixo e público, por isso serve de omissão
+# quando MODEL_MODE=anthropic — não faz sentido obrigar a preenchê-lo.
+ENDPOINT_ANTHROPIC = "https://api.anthropic.com"
+
+# Versão da API pedida no header obrigatório anthropic-version.
+VERSAO_API_ANTHROPIC = "2023-06-01"
+
+# max_tokens é obrigatório no corpo do pedido da Anthropic (ao contrário do
+# openai_compat, onde é opcional). O valor vem da especificação do modo.
+ANTHROPIC_MAX_TOKENS = 4096
 
 # Modelos carregados em processo no modo hf_local, reutilizados entre
 # chamadas. Numa GPU só cabem alguns em simultâneo — ver docstring de
@@ -152,6 +168,9 @@ def _despachar(mode, endpoint, model, prompt, system, api_key, timeout) -> str:
         return _call_hf_api(endpoint, model, prompt, system, api_key, timeout)
     if mode == "ollama":
         return _call_ollama(endpoint, model, prompt, system, timeout)
+    if mode == "anthropic":
+        return _call_anthropic(endpoint, model, prompt, system, api_key,
+                               timeout)
     # openai_compat é o modo por omissão (vLLM, TGI, llama.cpp server).
     return _call_openai_compatible(endpoint, model, prompt, system,
                                    api_key, timeout)
@@ -180,6 +199,51 @@ def _call_openai_compatible(
     resp.raise_for_status()
     data = resp.json()
     return data["choices"][0]["message"]["content"]
+
+
+def _call_anthropic(
+    endpoint: str, model: str, prompt: str, system: str,
+    api_key: str, timeout: float,
+) -> str:
+    """Chama a API de mensagens da Anthropic directamente, sem proxy.
+
+    Parece o openai_compat mas difere em quatro pontos, e nenhum deles é
+    cosmético — trocar qualquer um devolve 400 ou lê a resposta errada:
+
+      1. autenticação em `x-api-key`, não em `Authorization: Bearer`
+      2. header `anthropic-version` obrigatório
+      3. system prompt num campo `system` de topo, não como uma mensagem
+         de role "system" dentro de `messages`
+      4. o texto está em content[0].text, não em choices[0].message.content
+
+    `max_tokens` também é obrigatório aqui, ao contrário do openai_compat.
+
+    A leitura da resposta procura o primeiro bloco de texto em vez de assumir
+    cegamente o índice 0: a lista `content` é heterogénea por desenho (pode
+    trazer outros tipos de bloco à frente do texto), e nesse caso content[0]
+    não teria sequer a chave "text".
+    """
+    url = (endpoint or ENDPOINT_ANTHROPIC).rstrip("/") + "/v1/messages"
+    headers = {
+        "content-type": "application/json",
+        "anthropic-version": VERSAO_API_ANTHROPIC,
+    }
+    if api_key:
+        headers["x-api-key"] = api_key
+    payload = {
+        "model": model,
+        "max_tokens": ANTHROPIC_MAX_TOKENS,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if system:
+        payload["system"] = system
+    resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+    resp.raise_for_status()
+    blocos = resp.json().get("content") or []
+    for bloco in blocos:
+        if isinstance(bloco, dict) and bloco.get("type") == "text":
+            return bloco.get("text", "")
+    return ""
 
 
 def _call_hf_api(
@@ -268,9 +332,9 @@ def _call_ollama(
 class ModelRouter:
     """Lê MODEL_MODE do .env e abstrai a chamada ao modelo.
 
-    Modos suportados: openai_compat (omissão), hf_local, hf_api e ollama.
-    O método generate(prompt, model, endpoint) funciona identicamente em
-    todos — o resto do sistema nunca sabe qual está activo.
+    Modos suportados: openai_compat (omissão), hf_local, hf_api, ollama e
+    anthropic. O método generate(prompt, model, endpoint) funciona
+    identicamente em todos — o resto do sistema nunca sabe qual está activo.
     """
 
     def __init__(self, db=None):
@@ -357,6 +421,23 @@ def token_do_componente(component: str) -> str:
     )
 
 
+def endpoint_por_omissao() -> str:
+    """Endpoint usado por um componente que não defina o seu.
+
+    Normalmente é MODEL_ENDPOINT. No modo anthropic o endereço da API é fixo
+    e público, por isso serve de omissão quando MODEL_ENDPOINT não está
+    preenchido — não vale a pena obrigar a escrever o óbvio. Um
+    MODEL_ENDPOINT explícito continua a mandar em qualquer modo (permite
+    apontar para um proxy ou gateway compatível).
+    """
+    explicito = os.getenv("MODEL_ENDPOINT", "").strip()
+    if explicito:
+        return explicito
+    if os.getenv("MODEL_MODE", "").strip().lower() == "anthropic":
+        return ENDPOINT_ANTHROPIC
+    return "http://localhost:8000"
+
+
 def component_config(component: str) -> tuple[str, str, bool]:
     """Lê endpoint, modelo e flag de existência de um componente do .env.
 
@@ -368,7 +449,7 @@ def component_config(component: str) -> tuple[str, str, bool]:
     Para NEURONS, `enabled` reflecte ENABLE_NEURON_N (existência no sistema
     — não activação por ronda). Para CORTEX/CEREBELLUM é sempre True.
     """
-    omissao = os.getenv("MODEL_ENDPOINT", "http://localhost:8000")
+    omissao = endpoint_por_omissao()
     if component == "cortex":
         return (
             os.getenv("CORTEX_ENDPOINT", omissao),

@@ -177,6 +177,127 @@ def test_modo_ollama_continua_a_funcionar(monkeypatch):
                                  mode="ollama") == "do ollama"
 
 
+# --- Modo anthropic -------------------------------------------------------
+# O formato da Anthropic difere do openai_compat em quatro pontos, e nenhum
+# deles falha de forma barulhenta se estiver errado: ou é um 400, ou lê-se
+# uma resposta vazia. Cada um tem o seu teste.
+def _resposta_anthropic(texto):
+    return _Resposta({"content": [{"type": "text", "text": texto}]})
+
+
+def _capturar_pedido_anthropic(monkeypatch, texto="resposta da Anthropic"):
+    """Intercepta o POST e devolve o dicionário com url/headers/json."""
+    visto = {}
+
+    def falso_post(url, json=None, headers=None, timeout=None):
+        visto.update(url=url, json=json or {}, headers=headers or {})
+        return _resposta_anthropic(texto)
+
+    monkeypatch.setattr(httpx, "post", falso_post)
+    return visto
+
+
+def test_modo_anthropic_autentica_com_x_api_key(monkeypatch):
+    """A chave vai em x-api-key, não em Authorization: Bearer."""
+    visto = _capturar_pedido_anthropic(monkeypatch)
+    call_model_with_retry("https://api.anthropic.com", "claude-sonnet-4-6",
+                          "p", api_key="sk-ant-xxx", mode="anthropic")
+    assert visto["headers"]["x-api-key"] == "sk-ant-xxx"
+    assert "Authorization" not in visto["headers"]
+
+
+def test_modo_anthropic_envia_o_header_de_versao(monkeypatch):
+    """anthropic-version é obrigatório: sem ele a API recusa o pedido."""
+    visto = _capturar_pedido_anthropic(monkeypatch)
+    call_model_with_retry("https://api.anthropic.com", "claude-sonnet-4-6",
+                          "p", api_key="sk-ant-xxx", mode="anthropic")
+    assert visto["headers"]["anthropic-version"] == "2023-06-01"
+
+
+def test_modo_anthropic_poe_o_system_no_campo_proprio(monkeypatch):
+    """O system prompt é um campo de topo, não uma mensagem de role system."""
+    visto = _capturar_pedido_anthropic(monkeypatch)
+    call_model_with_retry("https://api.anthropic.com", "claude-sonnet-4-6",
+                          "p", system="és o CORTEX", mode="anthropic")
+    corpo = visto["json"]
+    assert corpo["system"] == "és o CORTEX"
+    assert [m["role"] for m in corpo["messages"]] == ["user"]
+    assert all(m["role"] != "system" for m in corpo["messages"])
+
+
+def test_modo_anthropic_le_a_resposta_de_content_text(monkeypatch):
+    """O texto está em content[0].text, não em choices[0].message.content."""
+    monkeypatch.setattr(
+        httpx, "post", lambda *a, **k: _resposta_anthropic("gerado pelo Claude"))
+    assert call_model_with_retry("https://api.anthropic.com", "m", "p",
+                                 mode="anthropic") == "gerado pelo Claude"
+
+
+def test_modo_anthropic_monta_o_url_das_mensagens(monkeypatch):
+    visto = _capturar_pedido_anthropic(monkeypatch)
+    call_model_with_retry("https://api.anthropic.com/", "m", "p",
+                          mode="anthropic")
+    assert visto["url"] == "https://api.anthropic.com/v1/messages"
+
+
+def test_modo_anthropic_envia_max_tokens(monkeypatch):
+    """max_tokens é obrigatório aqui, ao contrário do openai_compat."""
+    visto = _capturar_pedido_anthropic(monkeypatch)
+    call_model_with_retry("https://api.anthropic.com", "m", "p",
+                          mode="anthropic")
+    assert visto["json"]["max_tokens"] == 4096
+
+
+def test_modo_anthropic_ignora_blocos_que_nao_sao_texto(monkeypatch):
+    """content é uma lista heterogénea: assumir o índice 0 dá KeyError."""
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resposta({
+        "content": [{"type": "thinking", "thinking": "..."},
+                    {"type": "text", "text": "o que interessa"}]}))
+    assert call_model_with_retry("https://api.anthropic.com", "m", "p",
+                                 mode="anthropic") == "o que interessa"
+
+
+def test_endpoint_por_omissao_do_modo_anthropic(monkeypatch):
+    """Com MODEL_MODE=anthropic e MODEL_ENDPOINT ausente, usa a API pública."""
+    monkeypatch.setenv("MODEL_MODE", "anthropic")
+    monkeypatch.delenv("MODEL_ENDPOINT", raising=False)
+    endpoint, _, _ = component_config("cortex")
+    assert endpoint == "https://api.anthropic.com"
+
+
+def test_endpoint_explicito_manda_mesmo_no_modo_anthropic(monkeypatch):
+    """Permite apontar a um proxy compatível sem mudar de modo."""
+    monkeypatch.setenv("MODEL_MODE", "anthropic")
+    monkeypatch.setenv("MODEL_ENDPOINT", "https://proxy-interno:8443")
+    endpoint, _, _ = component_config("neuron_1")
+    assert endpoint == "https://proxy-interno:8443"
+
+
+def test_omissao_dos_outros_modos_nao_muda(monkeypatch):
+    """Regressão: a omissão só passa a ser a Anthropic no modo anthropic."""
+    monkeypatch.delenv("MODEL_ENDPOINT", raising=False)
+    for modo in ("openai_compat", "hf_api", "ollama"):
+        monkeypatch.setenv("MODEL_MODE", modo)
+        endpoint, _, _ = component_config("cortex")
+        assert endpoint == "http://localhost:8000"
+
+
+def test_modo_anthropic_repete_em_529(monkeypatch):
+    """529 (overloaded) é transitório e tem de entrar no retry."""
+    tentativas = []
+
+    def falso_post(*a, **k):
+        tentativas.append(1)
+        if len(tentativas) < 2:
+            return _Resposta({}, status=529)
+        return _resposta_anthropic("recuperou")
+
+    monkeypatch.setattr(httpx, "post", falso_post)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    assert call_model_with_retry("https://api.anthropic.com", "m", "p",
+                                 mode="anthropic", max_retries=3) == "recuperou"
+
+
 def test_modo_hf_local_sem_transformers_da_erro_claro(monkeypatch):
     """Sem as dependências, a mensagem tem de dizer o que instalar."""
     import builtins

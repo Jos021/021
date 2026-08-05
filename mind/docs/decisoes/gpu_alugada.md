@@ -21,6 +21,7 @@ Os quatro coexistem atrás do mesmo `ModelRouter` e escolhem-se por
 | `hf_local` | O MIND corre **na própria máquina** da GPU | `transformers` em processo. Aceita ids do Hub e caminhos de disco. Exige `requirements-hf.txt`. |
 | `hf_api` | Inference API / Inference Endpoints da HuggingFace | Não exige GPU; os dados saem para a HF. |
 | `ollama` | Instalações locais existentes | Mantido por compatibilidade. |
+| `anthropic` | API da Anthropic directamente | Não exige GPU nenhuma; os dados saem para a Anthropic. `MODEL_ENDPOINT` tem omissão própria. |
 
 O campo `*_MODEL` aceita indistintamente **id do Hub**
 (`Qwen/Qwen2.5-Coder-32B-Instruct`), **nome de adaptador LoRA servido**
