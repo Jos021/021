@@ -1,0 +1,33 @@
+# ==========================================================================
+# Tarefas de referência do piloto
+# ==========================================================================
+# Usadas por `python main.py piloto` para medir o comportamento do MIND com
+# modelos reais. São 10 — o intervalo que o critério de selecção de modelo
+# pede (5-10 tarefas reais por componente).
+#
+# Estão ordenadas por dificuldade crescente. Se o orçamento de GPU for
+# curto, `--max-tarefas 3` corre só as três primeiras, que são as que
+# respondem à pergunta mais básica: o ciclo chega ao fim?
+#
+# Substitui-as pelas tuas assim que souberes que tipo de código o MIND vai
+# gerar na prática — a lista serve para medir, e mede melhor se for
+# representativa do trabalho real.
+
+tarefas:
+  # --- Nível de entrada: o ciclo chega ao fim? ---------------------------
+  - "Cria uma função que valida um endereço de email e devolve True ou False"
+  - "Cria uma função que ordena uma lista de números por ordem crescente sem usar sorted"
+  - "Cria uma função que converte uma temperatura de Celsius para Fahrenheit"
+
+  # --- Intermédias: várias secções, estado, tratamento de erro -----------
+  - "Cria um parser de ficheiros CSV que devolve uma lista de dicionários e trata linhas malformadas"
+  - "Cria uma cache em memória com limite de tamanho e política de remoção do menos usado recentemente"
+  - "Cria um cliente HTTP com retry e backoff exponencial para pedidos GET"
+
+  # --- Domínio do projecto: pentest tooling ------------------------------
+  - "Cria um scanner que verifica quais portas TCP de uma lista estão abertas num host, com timeout por porta"
+  - "Cria uma função que gera e valida tokens JWT com expiração e refresh"
+
+  # --- Difíceis: concorrência e multi-linguagem --------------------------
+  - "Cria um sistema de autenticação com registo, login, hashing de palavra-passe e sessões expiráveis"
+  - "Cria um pool de workers que processa uma fila de tarefas em paralelo e recolhe os resultados por ordem de submissão"

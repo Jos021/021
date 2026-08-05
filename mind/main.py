@@ -13,6 +13,10 @@ Uso:
     # a partir do estado actual na iteração seguinte, sem recomeçar:
     python main.py intervene --cycle-id 5 --new-task "nova descrição"
 
+    # Piloto com modelos reais (ver agent/piloto.py):
+    python main.py verificar                    # testa a ligação, sem gastar ciclos
+    python main.py piloto --max-tarefas 3       # corre e mede
+
     # HIPPOCAMPUS (camada de apoio de ML — ver agent/hippocampus.py):
     python main.py ml-status                                  # estado dos modelos
     python main.py ml-train --force                           # força treino
@@ -48,6 +52,7 @@ DB_PATH = os.path.join(BASE_DIR, "synapse.db")
 SPECIALTIES_PATH = os.path.join(BASE_DIR, "config", "neuron_specialties.yaml")
 ML_CONFIG_PATH = os.path.join(BASE_DIR, "config", "ml_config.yaml")
 MODELS_DIR = os.path.join(BASE_DIR, "models", "hippocampus")
+TAREFAS_PILOTO_PATH = os.path.join(BASE_DIR, "config", "piloto_tarefas.yaml")
 
 
 def _console():
@@ -255,6 +260,117 @@ def cmd_ml_export(consumer: str, output: str) -> None:
         db.close()
 
 
+# --------------------------------------------------------------------------
+# Piloto com modelos reais
+# --------------------------------------------------------------------------
+def cmd_verificar() -> None:
+    """Testa a ligação a cada componente configurado, sem correr ciclos."""
+    from agent.piloto import verificar_componentes
+
+    console = _console()
+    db = SynapseDB(DB_PATH)
+    try:
+        diagnosticos = verificar_componentes(db)
+        linhas, falhas, sem_modelo = [], 0, 0
+        for d in diagnosticos:
+            if not d.configurado:
+                sem_modelo += 1
+                linhas.append(f"  {d.componente:<12} — sem modelo configurado")
+                continue
+            if d.respondeu:
+                linhas.append(
+                    f"  {d.componente:<12} OK   {d.latencia_s}s  "
+                    f"{d.modelo}  -> {d.amostra!r}"
+                )
+            else:
+                falhas += 1
+                linhas.append(
+                    f"  {d.componente:<12} FALHOU  {d.endpoint}  {d.erro}"
+                )
+        texto = "\n".join(linhas)
+        ok = len(diagnosticos) - falhas - sem_modelo
+        resumo = (
+            f"\n{ok} a responder, {falhas} com falha, "
+            f"{sem_modelo} sem modelo configurado."
+        )
+        if console:
+            console.print(f"[bold cyan]VERIFICAÇÃO[/]\n{texto}{resumo}")
+        else:
+            print(texto + resumo)
+        if falhas:
+            sys.exit(1)
+    finally:
+        db.close()
+
+
+def cmd_piloto(max_tarefas: int, output: str, tarefas_path: str) -> None:
+    """Corre as tarefas de referência e mede o que só modelos reais revelam."""
+    from agent.piloto import (
+        carregar_tarefas,
+        correr_piloto,
+        exportar_csv,
+        resumir,
+        verificar_componentes,
+    )
+
+    console = _console()
+    db = SynapseDB(DB_PATH)
+    try:
+        # Verificar antes de gastar: um URL errado descobre-se em segundos.
+        problemas = [d for d in verificar_componentes(db)
+                     if d.configurado and not d.respondeu]
+        if problemas:
+            nomes = ", ".join(d.componente for d in problemas)
+            msg = (f"Componentes sem resposta: {nomes}. "
+                   "Corre 'python main.py verificar' para o detalhe.")
+            (console.print(f"[bold red]PILOTO[/] {msg}") if console
+             else print(msg))
+            sys.exit(1)
+
+        tarefas = carregar_tarefas(tarefas_path)
+        if not tarefas:
+            msg = f"Nenhuma tarefa em {tarefas_path}."
+            (console.print(f"[bold red]PILOTO[/] {msg}") if console
+             else print(msg))
+            sys.exit(1)
+
+        resultados = correr_piloto(
+            tarefas, db, lambda: _build_graph(db, console), console,
+            max_tarefas,
+        )
+        exportar_csv(resultados, output)
+        _mostrar_resumo(console, resumir(resultados), output)
+    finally:
+        db.close()
+
+
+def _mostrar_resumo(console, resumo: dict, output: str) -> None:
+    """Apresenta as medições do piloto."""
+    def valor(chave, sufixo=""):
+        v = resumo.get(chave)
+        return "—" if v is None else f"{v}{sufixo}"
+
+    linhas = [
+        f"  tarefas corridas:        {resumo.get('tarefas', 0)}",
+        f"  aprovadas:               {resumo.get('aprovadas', 0)} "
+        f"({valor('taxa_aprovacao', '%')})",
+        f"  erros:                   {resumo.get('erros', 0)}",
+        f"  duração média:           {valor('duracao_media_s', 's')}",
+        f"  duração máxima:          {valor('duracao_max_s', 's')}",
+        f"  iterações (média):       {valor('iteracoes_media')}",
+        f"  conformidade JSON:       {valor('conformidade_json_media', '%')}",
+        f"  testes gerados:          {resumo.get('testes_gerados', 0)}",
+        f"  testes executados:       {resumo.get('testes_executados', 0)}",
+        f"  testes passados:         {valor('taxa_testes_passados', '%')}",
+        f"\n  medições em {output}",
+    ]
+    texto = "\n".join(linhas)
+    if console:
+        console.print(f"[bold green]PILOTO — RESULTADOS[/]\n{texto}")
+    else:
+        print(texto)
+
+
 def _report_result(console, state: dict) -> None:
     status = state.get("status")
     pct = state.get("functionality_pct", 0.0)
@@ -310,6 +426,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_mlexp.add_argument("--consumer", type=str, required=True)
     p_mlexp.add_argument("--output", type=str, default="datasets/ml_export.csv")
 
+    # --- Piloto com modelos reais ----------------------------------------
+    sub.add_parser("verificar",
+                   help="Testa a ligação a cada componente, sem correr ciclos.")
+
+    p_pil = sub.add_parser("piloto",
+                           help="Corre as tarefas de referência e mede.")
+    p_pil.add_argument("--max-tarefas", type=int, default=0,
+                       help="Limita o número de tarefas (0 = todas).")
+    p_pil.add_argument("--output", type=str,
+                       default="datasets/piloto.csv")
+    p_pil.add_argument("--tarefas", type=str, default=TAREFAS_PILOTO_PATH)
+
     # tarefa principal (argumento posicional livre)
     parser.add_argument("task", nargs="?", help="Descrição da tarefa a gerar.")
     return parser
@@ -325,7 +453,7 @@ def main(argv=None) -> None:
     parser = build_parser()
     subcommands = (
         "export", "intervene", "ml-status", "ml-train", "ml-export",
-        "-h", "--help",
+        "verificar", "piloto", "-h", "--help",
     )
     if argv and argv[0] in subcommands:
         args = parser.parse_args(argv)
@@ -339,6 +467,10 @@ def main(argv=None) -> None:
             cmd_ml_train(args.force, args.consumer)
         elif args.command == "ml-export":
             cmd_ml_export(args.consumer, args.output)
+        elif args.command == "verificar":
+            cmd_verificar()
+        elif args.command == "piloto":
+            cmd_piloto(args.max_tarefas, args.output, args.tarefas)
         else:
             parser.print_help()
             sys.exit(1)
