@@ -194,6 +194,40 @@ def _medir_conformidade(db, cycle_id: int, resultado: ResultadoTarefa) -> None:
         pass
 
 
+def conformidade_por_componente(db) -> dict:
+    """Conformidade com o esquema JSON acumulada, por componente.
+
+    Lida directamente da SYNAPSE DB, sobre todo o histórico — não depende de
+    ter corrido o piloto. É o que o runbook do piloto manda consultar no
+    fim da primeira passagem, e é o número que diz se um modelo cumpre o
+    contrato de formato.
+
+    Devolve {componente: {"chamadas": N, "desvios": N, "pct": X}}.
+    """
+    resultado = {}
+    try:
+        for componente in ("cortex", "cerebellum"):
+            chamadas = db._conn.execute(          # noqa: SLF001
+                "SELECT COUNT(*) AS n FROM iterations WHERE component = ?",
+                (componente,)
+            ).fetchone()
+            desvios = db._conn.execute(           # noqa: SLF001
+                "SELECT COUNT(*) AS n FROM decisions WHERE component = ? "
+                "AND decision_text LIKE '%não respeitou o esquema JSON%'",
+                (componente,)
+            ).fetchone()
+            n = chamadas["n"] if chamadas else 0
+            d = desvios["n"] if desvios else 0
+            resultado[componente] = {
+                "chamadas": n,
+                "desvios": d,
+                "pct": round(max(0, n - d) / n * 100, 1) if n else None,
+            }
+    except Exception:
+        return {}
+    return resultado
+
+
 def exportar_csv(resultados: list, caminho: str) -> int:
     """Escreve as medições em CSV. Devolve o número de linhas."""
     import csv

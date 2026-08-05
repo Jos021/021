@@ -265,3 +265,36 @@ def test_exportar_csv_vazio(tmp_path):
     destino = str(tmp_path / "vazio.csv")
     assert exportar_csv([], destino) == 0
     assert open(destino, encoding="utf-8").read().strip().startswith("tarefa,")
+
+
+# ==========================================================================
+# Conformidade acumulada (o que o runbook do piloto manda consultar)
+# ==========================================================================
+def test_conformidade_por_componente_sem_dados(db):
+    from agent.piloto import conformidade_por_componente
+
+    r = conformidade_por_componente(db)
+    assert set(r) == {"cortex", "cerebellum"}
+    assert all(info["pct"] is None for info in r.values())
+
+
+def test_conformidade_por_componente_conta_desvios(db, cycle_id):
+    from agent.piloto import conformidade_por_componente
+    from agent.report_schema import parse_relatorio, registar_desvio_de_formato
+
+    for _ in range(4):
+        db.log_iteration(cycle_id, 1, "3", "cerebellum")
+    registar_desvio_de_formato(
+        db, cycle_id, 1, "cerebellum", parse_relatorio("PCT: 50"))
+
+    info = conformidade_por_componente(db)["cerebellum"]
+    assert info["chamadas"] == 4
+    assert info["desvios"] == 1
+    assert info["pct"] == 75.0
+
+
+def test_conformidade_nunca_lanca(db):
+    from agent.piloto import conformidade_por_componente
+
+    db.close()   # força falha interna
+    assert conformidade_por_componente(db) == {}

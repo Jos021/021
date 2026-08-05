@@ -211,6 +211,25 @@ def cmd_ml_status() -> None:
                 + ("  [RETREINO RECOMENDADO]" if info["needs_retrain"] else "")
             )
             lines.append("")
+
+        # Conformidade com o esquema JSON. Fica aqui porque é onde o runbook
+        # do piloto manda procurá-la no fim da primeira passagem.
+        from agent.piloto import conformidade_por_componente
+
+        conformidade = conformidade_por_componente(db)
+        if conformidade:
+            lines.append("CONFORMIDADE COM O ESQUEMA JSON (histórico)")
+            for comp, info in conformidade.items():
+                if not info["chamadas"]:
+                    lines.append(f"  {comp}: sem chamadas registadas")
+                    continue
+                lines.append(
+                    f"  {comp}: {info['pct']}%  "
+                    f"({info['chamadas'] - info['desvios']} válidas em "
+                    f"{info['chamadas']} chamadas, {info['desvios']} desvios)"
+                )
+            lines.append("")
+
         text = "\n".join(lines)
         if console:
             console.print(f"[bold cyan]HIPPOCAMPUS[/]\n{text}")
