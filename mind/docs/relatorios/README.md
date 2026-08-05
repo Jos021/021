@@ -22,3 +22,8 @@ distingue vários relatórios do mesmo dia.
 | `Relatorio_MIND_2026-08-03_05_sandbox_evolutiva.pdf` | Sandbox de testes evolutiva — instruções 45-61 (commit `06a57a6`) |
 | `Relatorio_MIND_2026-08-03_06_preparacao_do_piloto.pdf` | Ferramenta de verificação e medição com modelos reais (commit `a143abf`) |
 | `Relatorio_MIND_2026-08-03_07_ensaio_do_runbook.pdf` | Ensaio das 4 passagens sem GPU; discrepância do `ml-status` corrigida (commit `de9e0a1`) |
+| **`Relatorio_MIND_2026-08-03_08_consolidado.pdf`** | **Quadro completo: arquitectura, cronologia, decisões, o que está provado e o que falta** |
+
+O **relatório consolidado** é o ponto de entrada para quem chega ao projecto:
+resume as 9 entregas, as decisões de arquitectura, e — sobretudo — separa o
+que está provado do que continua por provar.
