@@ -168,18 +168,33 @@ def main():
         executar("tail -20 /tmp/tunel.log")
         sys.exit(1)
 
+    # Mapa modelo -> componentes que o usam, para dizer onde colar. Se o
+    # modelo não estiver no mapa, mostra as variáveis genéricas.
+    mapa = {
+        "saidutta69/Qwen2.5-Coder-7B-Instruct-heretic": ["CORTEX", "NEURON_3"],
+        "huihui-ai/Qwen2.5-Coder-7B-Instruct-abliterated": ["CEREBELLUM", "NEURON_6"],
+        "GodsDevProject/qwe2.5-coder-Uncensored": ["NEURON_1"],
+        "vanta-research/wraith-coder-7b": ["NEURON_4"],
+        "Qwen/Qwen2.5-Coder-7B-Instruct": ["NEURON_2", "NEURON_5"],
+    }
+    componentes = mapa.get(MODELO)
+
     print("\n" + "=" * 74)
-    print("PRONTO — põe isto no .env do MIND (na tua máquina):")
+    print("PRONTO — cola estas linhas no .env do MIND (na tua máquina):")
     print("=" * 74)
-    print(f"MODEL_MODE=openai_compat")
-    print(f"MODEL_ENDPOINT={url}")
-    print(f"MODEL_AUTH_TOKEN={token}")
-    print(f"CORTEX_MODEL={MODELO}")
-    print(f"CEREBELLUM_MODEL={MODELO}")
-    for n in range(1, 7):
-        print(f"NEURON_{n}_MODEL={MODELO}")
+    if componentes:
+        print(f"# Servidor de {MODELO}")
+        for comp in componentes:
+            print(f"{comp}_ENDPOINT={url}")
+            print(f"{comp}_TOKEN={token}")
+        print(f"\n(este servidor serve: {', '.join(componentes)})")
+    else:
+        # Modelo fora do mapa do piloto: config global de um só servidor.
+        print(f"MODEL_ENDPOINT={url}")
+        print(f"MODEL_AUTH_TOKEN={token}")
+        print(f"CORTEX_MODEL={MODELO}")
     print("=" * 74)
-    print("Verifica com:  python main.py verificar")
+    print("Quando os 5 servidores estiverem no .env:  python main.py verificar")
     print("\nDEIXA ESTA CÉLULA A CORRER. Se parar, o túnel fecha e o URL "
           "muda no arranque seguinte.")
     try:
