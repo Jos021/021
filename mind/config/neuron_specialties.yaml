@@ -1,0 +1,27 @@
+# ==========================================================================
+# Especialidades dos NEURONS
+# ==========================================================================
+# Vazio por agora — a preencher manualmente conforme os modelos escolhidos.
+# Ver docs/model_selection_criteria.md ("Critério de Selecção de Modelo").
+#
+# Formato previsto (exemplo, não activo):
+#
+# neuron_1:
+#   name: "Autenticação e Segurança"
+#   description: "Gera lógica de autenticação, tokens, hashing"
+#   default_language: python
+#
+# neuron_4:
+#   name: "Payloads de baixo nível"
+#   description: "Componentes de performance crítica"
+#   default_language: rust
+#
+# Enquanto vazio, o princípio estrutural mantém-se: cada NEURON recebe
+# sempre o código base completo, mas só desenvolve a secção do seu marcador.
+
+neuron_1:
+neuron_2:
+neuron_3:
+neuron_4:
+neuron_5:
+neuron_6:

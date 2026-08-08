@@ -1,0 +1,34 @@
+# Ambiente
+.env
+
+# SYNAPSE DB (dados operacionais locais — nunca versionar)
+synapse.db
+synapse.db-wal
+synapse.db-shm
+
+# Backups gerados
+backups/*.db
+
+# Workspace de execução (git local interno + sandbox + output)
+workspace/.git/
+workspace/.sandbox/
+workspace/output/
+
+# Datasets exportados
+datasets/*.jsonl
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Modelos treinados do HIPPOCAMPUS (artefactos locais, não versionar)
+models/hippocampus/*.joblib
+models/hippocampus/*.pkl
+
+# Exportações ML
+datasets/*.csv
+
+# Cache do pytest
+.pytest_cache/

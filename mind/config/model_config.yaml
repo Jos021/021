@@ -1,0 +1,54 @@
+# ==========================================================================
+# Configuração de modelos por componente
+# ==========================================================================
+# Princípio de dimensionamento: cada componente recebe um modelo dimensionado
+# ao esforço cognitivo real da sua função.
+#   CORTEX     = maior modelo disponível
+#   CEREBELLUM = médio-alto
+#   NEURONS    = dimensionados caso a caso, conforme a complexidade real
+#
+# Os campos 'model' ficam VAZIOS por defeito — a preencher via critério
+# documentado em docs/model_selection_criteria.md. Os valores aqui servem
+# de fallback/documentação; a fonte de verdade em runtime é o .env, que
+# tem precedência sobre este ficheiro.
+#
+# Nota: o .env é lido primeiro. Este YAML apenas documenta a intenção de
+# dimensionamento e permite anotações por componente.
+
+cortex:
+  endpoint: http://localhost:11434
+  model: ""            # maior modelo disponível
+  sizing: "max"
+  notes: "Orquestrador. Persona JARVIS. Raciocínio de distribuição e decisão."
+
+cerebellum:
+  endpoint: http://localhost:11434
+  model: ""            # médio-alto
+  sizing: "high"
+  notes: "Revisor/auditor. Validação cruzada e cálculo de funcionalidade."
+
+neurons:
+  neuron_1:
+    endpoint: http://localhost:11434
+    model: ""
+    sizing: "case-by-case"
+  neuron_2:
+    endpoint: http://localhost:11434
+    model: ""
+    sizing: "case-by-case"
+  neuron_3:
+    endpoint: http://localhost:11434
+    model: ""
+    sizing: "case-by-case"
+  neuron_4:
+    endpoint: http://localhost:11434
+    model: ""
+    sizing: "case-by-case"
+  neuron_5:
+    endpoint: http://localhost:11434
+    model: ""
+    sizing: "case-by-case"
+  neuron_6:
+    endpoint: http://localhost:11434
+    model: ""
+    sizing: "case-by-case"

@@ -1,0 +1,28 @@
+# ==========================================================================
+# HIPPOCAMPUS — configuração da camada de apoio de ML
+# ==========================================================================
+# Só é lida quando ML_ENABLED=true. Com ML_ENABLED=false, todo o sistema
+# funciona exactamente como a base, sem qualquer chamada a esta camada.
+#
+# Cada consumidor ('cortex' e 'cerebellum') tem o seu modelo independente,
+# treinado sobre o histórico operacional local da SYNAPSE DB.
+#
+# Natureza da tarefa por consumidor:
+#   cortex_support     -> regressão   (prevê a % de funcionalidade esperada)
+#   cerebellum_support -> classificação (prevê probabilidade de aprovação;
+#                         a probabilidade da classe negativa alimenta a
+#                         auto-rejeição assimétrica)
+
+cortex_support:
+  model_type: "random_forest"
+  n_estimators: 100
+  max_depth: 10
+  features: ["task_embedding", "task_keywords", "history_success_rate"]
+
+cerebellum_support:
+  model_type: "xgboost"
+  n_estimators: 200
+  max_depth: 6
+  features: ["code_complexity", "test_coverage", "failure_patterns",
+             "history_approval_rate"]
+  auto_reject_confidence: 0.9
