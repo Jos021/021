@@ -62,6 +62,47 @@ alimentar treino externo, por decisão explícita do operador.
 
 ---
 
+## Modelos indicados para o piloto (8 de Agosto de 2026)
+
+Escolha do operador: variantes de **Qwen2.5-Coder-7B** com restrições de
+segurança removidas (heretic / abliterated / uncensored). É uma decisão de
+domínio — a Muñdji gera ferramentas de segurança ofensiva, e um modelo que
+recusa esse tipo de código não serve para o efeito. A qualidade destas
+variantes comunitárias é desconhecida e é precisamente o que o piloto mede.
+
+Todos os IDs foram **verificados por API** antes de entrarem no `.env`. Duas
+correcções face à lista indicada:
+
+| Componente | ID (verificado) | Nota |
+|---|---|---|
+| CORTEX | `saidutta69/Qwen2.5-Coder-7B-Instruct-heretic` | ok |
+| CEREBELLUM | `huihui-ai/Qwen2.5-Coder-7B-Instruct-abliterated` | ok |
+| NEURON 1 | `GodsDevProject/qwe2.5-coder-Uncensored` | ok (o `qwe2.5` é o nome real do repo) |
+| NEURON 2 | `Qwen/Qwen2.5-Coder-7B-Instruct` | **provisório** — `PyCDistill` não existe |
+| NEURON 3 | `saidutta69/Qwen2.5-Coder-7B-Instruct-heretic` | ok |
+| NEURON 4 | `vanta-research/wraith-coder-7b` | corrigido (faltava a org) |
+| NEURON 5 | `Qwen/Qwen2.5-Coder-7B-Instruct` | **provisório** — `PyCDistill` não existe |
+| NEURON 6 | `huihui-ai/Qwen2.5-Coder-7B-Instruct-abliterated` | ok |
+| HIPPOCAMPUS | `sentence-transformers/all-MiniLM-L6-v2` | ok (é o default do código) |
+
+**`Qwen/Qwen2.5-Coder-7B-PyCDistill` não existe** no HuggingFace — a Qwen
+nunca o publicou e a busca por "PyCDistill" no Hub inteiro não devolve nada.
+Fica o base Instruct como substituto assinalado até haver um ID real.
+
+### Restrição de serviço que decide o arranque do piloto
+
+São **cinco modelos distintos** de 7B (heretic, abliterated, uncensored,
+wraith, base). Cada um ocupa ~15 GB em fp16 — no total ~75 GB. **Não cabem
+em simultâneo em nenhuma GPU grátis** (T4 tem 16 GB, uma A100 tem 40 GB). O
+modo `openai_compat`/vLLM serve **um modelo por servidor**.
+
+Isto tem de se decidir antes de arrancar, e não é limitação do MIND — é
+memória de GPU. As opções estão descritas em `docs/decisoes/gpu_gratis.md`.
+A regra do dimensionamento por componente mantém-se como objectivo; a
+diferenciação real entre os oito só se mede quando houver GPU que os sirva.
+
+---
+
 ## Ficha por componente (campos por preencher)
 
 ### CORTEX
