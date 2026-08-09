@@ -9,10 +9,10 @@ synapse.db-shm
 # Backups gerados
 backups/*.db
 
-# Workspace de execução (git local interno + sandbox + output)
-workspace/.git/
-workspace/.sandbox/
-workspace/output/
+# Workspace de execução (git local interno + sandbox + output + snapshots).
+# Tudo dentro de workspace/ é artefacto de execução; só o .gitkeep se versiona.
+workspace/*
+!workspace/.gitkeep
 
 # Datasets exportados
 datasets/*.jsonl

@@ -500,23 +500,35 @@ def component_config(component: str) -> tuple[str, str, bool]:
 
     Para NEURONS, `enabled` reflecte ENABLE_NEURON_N (existência no sistema
     — não activação por ronda). Para CORTEX/CEREBELLUM é sempre True.
+
+    Um endpoint por componente VAZIO conta como não definido e cai no
+    MODEL_ENDPOINT global. Sem isto, o .env.example — que traz os endpoints
+    por componente vazios de propósito, para se preencher só o global — daria
+    endpoint vazio e reprovava os 8 componentes à primeira chamada. Foi
+    exactamente o que aconteceu no ensaio local.
     """
     omissao = endpoint_por_omissao()
     if component == "cortex":
         return (
-            os.getenv("CORTEX_ENDPOINT", omissao),
-            os.getenv("CORTEX_MODEL", ""),
+            _endpoint_ou_omissao("CORTEX_ENDPOINT", omissao),
+            os.getenv("CORTEX_MODEL", "").strip(),
             True,
         )
     if component == "cerebellum":
         return (
-            os.getenv("CEREBELLUM_ENDPOINT", omissao),
-            os.getenv("CEREBELLUM_MODEL", ""),
+            _endpoint_ou_omissao("CEREBELLUM_ENDPOINT", omissao),
+            os.getenv("CEREBELLUM_MODEL", "").strip(),
             True,
         )
     # neuron_N
     n = component.split("_")[-1]
-    endpoint = os.getenv(f"NEURON_{n}_ENDPOINT", omissao)
-    model = os.getenv(f"NEURON_{n}_MODEL", "")
-    enabled = os.getenv(f"ENABLE_NEURON_{n}", "true").lower() == "true"
+    endpoint = _endpoint_ou_omissao(f"NEURON_{n}_ENDPOINT", omissao)
+    model = os.getenv(f"NEURON_{n}_MODEL", "").strip()
+    enabled = os.getenv(f"ENABLE_NEURON_{n}", "true").strip().lower() == "true"
     return endpoint, model, enabled
+
+
+def _endpoint_ou_omissao(variavel: str, omissao: str) -> str:
+    """Lê um endpoint por componente; vazio/espaços conta como não definido."""
+    valor = os.getenv(variavel, "").strip()
+    return valor or omissao

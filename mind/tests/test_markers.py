@@ -10,6 +10,7 @@ import pytest
 from agent.cortex import (
     extract_section,
     find_other_markers,
+    limpar_codigo_modelo,
     marker_present,
     parse_markers,
 )
@@ -148,3 +149,49 @@ def test_linguagem_nao_e_inferida_do_conteudo():
     codigo = '// [NEURON_2:rust]\nfn f() { /* def isto nao e python */ }'
     markers = parse_markers(codigo)
     assert get_language_for_section("neuron_2", markers) == "rust"
+
+
+# ==========================================================================
+# Extracção de código de respostas de modelo (markdown + prosa)
+# ==========================================================================
+# Modelos reais quase sempre embrulham o código em ```fences``` e prosa. Sem
+# limpar isso, ia para a sandbox como erro de sintaxe e reprovava todo ciclo.
+# Encontrado num ensaio adversário que imita um 7B indisciplinado.
+def test_extrai_codigo_de_fence_com_prosa():
+    prosa = (
+        "Claro! Aqui está a implementação:\n\n"
+        "```python\n# [NEURON_1:python]\ndef f(x):\n    return x is not None\n```\n\n"
+        "Espero que ajude!"
+    )
+    limpo = limpar_codigo_modelo(prosa)
+    assert limpo == "# [NEURON_1:python]\ndef f(x):\n    return x is not None"
+    assert "Claro!" not in limpo and "Espero" not in limpo
+    assert "```" not in limpo
+
+
+def test_marcador_sobrevive_a_limpeza():
+    """O contrato de interface depende de o marcador não se perder."""
+    out = "```python\n# [NEURON_3:python]\npass\n```"
+    assert marker_present(limpar_codigo_modelo(out), "neuron_3")
+
+
+def test_sem_fences_devolve_intacto():
+    """Sem cercas não se corta nada — preâmbulo legítimo não se perde."""
+    codigo = "import os\n# [NEURON_1:python]\ndef f(): pass"
+    assert limpar_codigo_modelo(codigo) == codigo
+
+
+def test_marcadores_de_erro_passam_intactos():
+    """[NEURON_ERRO]/[CORTEX_ERRO] não têm cercas e não podem ser mexidos."""
+    assert limpar_codigo_modelo("[NEURON_ERRO] timeout") == "[NEURON_ERRO] timeout"
+
+
+def test_varios_blocos_sao_concatenados():
+    out = "```python\n# [NEURON_1:python]\na = 1\n```\ntexto\n```python\nb = 2\n```"
+    limpo = limpar_codigo_modelo(out)
+    assert "a = 1" in limpo and "b = 2" in limpo and "texto" not in limpo
+
+
+def test_vazio_nao_rebenta():
+    assert limpar_codigo_modelo("") == ""
+    assert limpar_codigo_modelo(None) is None

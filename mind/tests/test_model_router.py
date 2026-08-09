@@ -57,6 +57,20 @@ def test_endpoint_do_componente_tem_precedencia(monkeypatch):
     assert endpoint == "https://grande:8000"
 
 
+def test_endpoint_do_componente_vazio_cai_no_global(monkeypatch):
+    """O .env.example traz os endpoints por componente vazios de propósito.
+
+    Sem esta regra, um CORTEX_ENDPOINT= vazio devolvia "" (a variável está
+    definida, logo o default do getenv não entra) e os 8 componentes
+    reprovavam à primeira chamada — foi o que o ensaio local apanhou.
+    """
+    monkeypatch.setenv("MODEL_ENDPOINT", "https://global:8000")
+    monkeypatch.setenv("CORTEX_ENDPOINT", "")        # vazio, como no template
+    monkeypatch.setenv("NEURON_2_ENDPOINT", "   ")   # só espaços
+    assert component_config("cortex")[0] == "https://global:8000"
+    assert component_config("neuron_2")[0] == "https://global:8000"
+
+
 @pytest.mark.parametrize("valor", [
     "Qwen/Qwen2.5-Coder-32B-Instruct",   # id do Hub
     "cortex-lora-v3",                     # adaptador LoRA servido

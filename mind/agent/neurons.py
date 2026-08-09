@@ -80,6 +80,16 @@ class Neuron:
             )
         except ModelError as exc:
             out = f"[NEURON_ERRO] {exc.message}"
+        else:
+            # Modelos reais embrulham o código em markdown e prosa. Extrair
+            # o código cercado aqui, à entrada, garante que a validação de
+            # contrato, a organização e a sandbox vêem código limpo. Sem
+            # isto, um NEURON que respondesse "Aqui está: ```py ...```"
+            # reprovava sempre por erro de sintaxe na sandbox. Marcadores
+            # de erro internos não passam por aqui (só o ramo de sucesso).
+            from .cortex import limpar_codigo_modelo
+
+            out = limpar_codigo_modelo(out)
         self.db.log_iteration(
             state["cycle_id"], state["iteration"], "2", self.neuron_id,
             input_summary=(improvement or "implementar secção")[:200],

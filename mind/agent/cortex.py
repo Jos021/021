@@ -30,6 +30,36 @@ MARKER_RE = re.compile(
 )
 
 
+# Blocos de código cercados em markdown: ```python ... ``` (ou ```, ~~~).
+_FENCE_RE = re.compile(r"(?:```|~~~)[^\n]*\n(.*?)(?:```|~~~)", re.DOTALL)
+
+
+def limpar_codigo_modelo(output: str) -> str:
+    """Extrai o código de uma resposta de modelo embrulhada em markdown/prosa.
+
+    Modelos reais quase sempre embrulham o código em blocos ```lang ... ```
+    e acrescentam conversa ("Claro! Aqui está:"). Se isso fosse para a
+    sandbox tal e qual, seria erro de sintaxe em praticamente todos os
+    ciclos — foi o que o ensaio adversário mostrou.
+
+    Quando há blocos cercados, fica só o conteúdo deles e a prosa à volta é
+    descartada. Quando não há, devolve-se o texto como está: sem cercas não
+    há forma fiável de separar código de prosa sem arriscar cortar preâmbulo
+    legítimo (imports antes do primeiro marcador), e a validação de contrato
+    trata dos casos que restam.
+
+    Um marcador [NEURON_N:...] dentro do bloco sobrevive — é o que o contrato
+    de interface precisa. Marcadores de erro internos ([NEURON_ERRO],
+    [CORTEX_ERRO]) não têm cercas, portanto passam intactos.
+    """
+    if not output:
+        return output
+    blocos = _FENCE_RE.findall(output)
+    if blocos:
+        return "\n".join(b.rstrip("\n") for b in blocos).strip()
+    return output.strip()
+
+
 def parse_markers(code: str) -> dict:
     """Extrai os marcadores do código -> {neuron_id: {'language': str}}."""
     markers: dict = {}
@@ -236,7 +266,7 @@ class Cortex:
         else:
             logic, code = out, out
         state["base_logic"] = logic.strip()
-        state["base_code"] = code.strip()
+        state["base_code"] = limpar_codigo_modelo(code)
         self.db.log_iteration(
             state["cycle_id"], state["iteration"], "1", "cortex",
             input_summary=task[:200], output_summary="lógica+código base",
@@ -260,7 +290,7 @@ class Cortex:
         )
         out = self._generate(prompt, state=state)
         if out and not out.startswith("[CORTEX_ERRO]"):
-            state["base_code"] = out.strip()
+            state["base_code"] = limpar_codigo_modelo(out)
         self.db.log_iteration(
             state["cycle_id"], state["iteration"], "1", "cortex",
             input_summary="feedback f1", output_summary="código aprimorado",
@@ -289,7 +319,7 @@ class Cortex:
             )
             out = self._generate(prompt, state=state)
             if out and not out.startswith("[CORTEX_ERRO]"):
-                code = out.strip()
+                code = limpar_codigo_modelo(out)
                 state["base_code"] = code
         state["markers"] = parse_markers(code)
         self.db.log_iteration(
