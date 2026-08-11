@@ -56,8 +56,103 @@ def limpar_codigo_modelo(output: str) -> str:
         return output
     blocos = _FENCE_RE.findall(output)
     if blocos:
-        return "\n".join(b.rstrip("\n") for b in blocos).strip()
-    return output.strip()
+        limpo = "\n".join(b.rstrip("\n") for b in blocos).strip()
+    else:
+        limpo = output.strip()
+    return normalizar_marcadores(limpo)
+
+
+# Marcador em qualquer forma que um modelo real produz: [neuron_1],
+# [NEURON_1:python], "neuron 1", com ou sem prefixo de comentário, qualquer
+# caixa. O dígito é obrigatório (distingue de [NEURON_ERRO]).
+_MARCADOR_LIVRE = re.compile(
+    r"(?P<prefix>(?:#|//)\s*)?"
+    r"\[\s*neuron[_\s-]*(?P<n>\d+)\s*(?::\s*(?P<lang>[a-zA-Z0-9#+]+)\s*)?\]",
+    re.IGNORECASE,
+)
+# Marcador já na forma canónica (para decidir se falta o prefixo de comentário).
+_MARCADOR_CANONICO = re.compile(r"\[NEURON_\d+(?::[a-zA-Z0-9#+]+)?\]")
+
+
+def normalizar_marcadores(code: str) -> str:
+    """Converte marcadores de qualquer forma para a canónica # [NEURON_N:lang].
+
+    Um 7B não reproduz de forma fiável o formato exacto `# [NEURON_N:python]`.
+    Escreve `[neuron_1]`, `[NEURON 1]`, sem `#`, em minúsculas. Sem esta
+    normalização: (1) parse_markers não os reconhece — markers fica vazio e
+    nenhum NEURON corre; (2) um marcador sem `#` é erro de sintaxe na sandbox.
+
+    Aqui unifica-se tudo: o token passa a NEURON_N maiúsculo, e uma linha de
+    marcador sem prefixo de comentário recebe `# `, ficando código válido.
+    Marcadores de erro internos ([NEURON_ERRO]) não têm dígito — não são
+    tocados.
+    """
+    if not code:
+        return code
+
+    def _canon(m: "re.Match") -> str:
+        n = m.group("n")
+        lang = m.group("lang")
+        token = f"[NEURON_{n}:{lang.lower()}]" if lang else f"[NEURON_{n}]"
+        return (m.group("prefix") or "") + token
+
+    linhas = []
+    for linha in code.splitlines():
+        nova = _MARCADOR_LIVRE.sub(_canon, linha)
+        despida = nova.lstrip()
+        if _MARCADOR_CANONICO.search(nova) and not despida.startswith(("#", "//")):
+            indent = nova[: len(nova) - len(despida)]
+            nova = f"{indent}# {despida}"
+        linhas.append(nova)
+    return "\n".join(linhas)
+
+
+# Marcador canónico com prefixo de comentário opcional, para rebaixar alheios.
+_MARCADOR_PREFIXADO = re.compile(
+    r"(?P<prefix>(?:#|//)\s*)?\[NEURON_(?P<n>\d+)(?::[a-zA-Z0-9#+]+)?\]"
+)
+
+
+def manter_apenas_marcador_proprio(output: str, neuron_id: str) -> str:
+    """Rebaixa a comentário os marcadores de OUTROS neurons no output de um.
+
+    Um 7B, ao implementar a sua secção, usa a sintaxe de marcador para
+    rotular sub-passos ([NEURON_3:condicional] dentro do próprio corpo). Não
+    é uma edição da secção do neuron_3 — o output só substitui a própria
+    secção — mas dispara a heurística de marcadores alheios e faz reprovar
+    código válido. O próprio código descreve essa heurística como 'pista, não
+    prova'; a prova é o diff autoritativo das secções alheias, que continua a
+    correr e a guardar contra edições reais fora de âmbito.
+
+    Aqui os marcadores alheios perdem o token [NEURON_M] e ficam como
+    comentário simples; o marcador próprio mantém-se intacto.
+    """
+    if not output:
+        return output
+    own = neuron_id.split("_")[-1]
+
+    def _sub(m: "re.Match") -> str:
+        if m.group("n") == own:
+            return m.group(0)                     # o próprio, intacto
+        prefix = m.group("prefix") or ""
+        if prefix.strip().startswith(("#", "//")):
+            return prefix.rstrip() + " "          # já era comentário: fica comentário
+        return "# "                               # sem prefixo: vira comentário
+
+    return _MARCADOR_PREFIXADO.sub(_sub, output)
+
+
+def _python_valido(code: str) -> bool:
+    """True se `code` compila como Python. Usado para detectar anotação que
+    parte o código base. Sem marcadores estranhos: os comentários-marcador já
+    são comentários válidos."""
+    import ast
+
+    try:
+        ast.parse(code or "")
+        return True
+    except SyntaxError:
+        return False
 
 
 def parse_markers(code: str) -> dict:
@@ -314,12 +409,29 @@ class Cortex:
                 "Código base:\n" + code + "\n\n"
                 "Anota cada secção com um comentário-marcador do NEURON "
                 "responsável, no formato [NEURON_N] ou [NEURON_N:linguagem]. "
+                "NÃO alteres o código: só acrescenta os comentários-marcador. "
                 f"NEURONS disponíveis: {', '.join(enabled)}. "
                 "Devolve só o código anotado."
             )
             out = self._generate(prompt, state=state)
             if out and not out.startswith("[CORTEX_ERRO]"):
-                code = limpar_codigo_modelo(out)
+                anotado = limpar_codigo_modelo(out)
+                # Guarda: a anotação NÃO pode destruir código base válido. Um
+                # 7B tende a reescrever o código em pseudo-código fragmentado
+                # ao anotar. Se o base compilava e o anotado não, mantém-se o
+                # base e põe-se um único marcador — melhor um NEURON com código
+                # que funciona do que seis com fragmentos partidos.
+                if _python_valido(code) and not _python_valido(anotado):
+                    primeiro = enabled[0] if enabled else "neuron_1"
+                    n = primeiro.split("_")[-1]
+                    code = f"# [NEURON_{n}:python]\n{code}"
+                    self.db.log_decision(
+                        state["cycle_id"], state["iteration"], "cortex",
+                        "Anotação descartada: partiu o código base válido. "
+                        f"Mantido o base sob um marcador único ({primeiro}).",
+                    )
+                else:
+                    code = anotado
                 state["base_code"] = code
         state["markers"] = parse_markers(code)
         self.db.log_iteration(

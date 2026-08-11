@@ -195,3 +195,71 @@ def test_varios_blocos_sao_concatenados():
 def test_vazio_nao_rebenta():
     assert limpar_codigo_modelo("") == ""
     assert limpar_codigo_modelo(None) is None
+
+
+# ==========================================================================
+# Normalização de marcadores de modelos reais
+# ==========================================================================
+# Um 7B não reproduz o formato exacto `# [NEURON_N:python]`. Escreve
+# [neuron_1] minúsculo e sem #. Encontrado no primeiro piloto real: o modelo
+# devolveu "[neuron_1] descrição\ndef soma..." e o MIND ficou com markers=[].
+def test_normaliza_marcador_minusculo_sem_prefixo():
+    from agent.cortex import limpar_codigo_modelo
+    real = "[neuron_1] Função de soma.\ndef soma(a, b):\n    return a + b"
+    limpo = limpar_codigo_modelo(real)
+    assert parse_markers(limpo) == {"neuron_1": {"language": "python"}}
+    import ast
+    ast.parse(limpo)   # o marcador normalizado é comentário -> compila
+
+
+def test_marcador_sem_prefixo_ganha_comentario():
+    from agent.cortex import normalizar_marcadores
+    assert normalizar_marcadores("[NEURON_2:rust]\ncode").startswith("# [NEURON_2:rust]")
+
+
+def test_marcador_ja_canonico_nao_muda():
+    from agent.cortex import normalizar_marcadores
+    canon = "# [NEURON_3:python]\nx = 1"
+    assert normalizar_marcadores(canon) == canon
+
+
+def test_normalizacao_preserva_linguagem_e_caixa():
+    from agent.cortex import normalizar_marcadores
+    markers = parse_markers(normalizar_marcadores("[Neuron_4:GO]\ncode"))
+    assert markers == {"neuron_4": {"language": "go"}}
+
+
+def test_marcador_de_erro_nao_e_normalizado():
+    from agent.cortex import normalizar_marcadores
+    # Sem dígito, [NEURON_ERRO] não é um marcador de secção — não se toca.
+    assert normalizar_marcadores("[NEURON_ERRO] x") == "[NEURON_ERRO] x"
+
+
+# ==========================================================================
+# Marcadores alheios no output de um NEURON (rótulos de sub-passos)
+# ==========================================================================
+# Encontrado no primeiro piloto real: o NEURON_2 devolveu código VÁLIDO mas
+# usou [NEURON_3:...] como rótulo de sub-passo no próprio corpo. A heurística
+# reprovava código bom; a prova é o diff autoritativo, não a heurística.
+def test_marcador_alheio_no_output_e_rebaixado():
+    from agent.cortex import manter_apenas_marcador_proprio
+    out = ("# [NEURON_2:python]\ndef soma(a, b):\n"
+           "    # [NEURON_3:condicional]\n    return a + b")
+    limpo = manter_apenas_marcador_proprio(out, "neuron_2")
+    assert find_other_markers(limpo, "neuron_2") == []
+    assert marker_present(limpo, "neuron_2"), "o marcador próprio mantém-se"
+    import ast
+    ast.parse(limpo)
+
+
+def test_marcador_proprio_repetido_sobrevive():
+    from agent.cortex import manter_apenas_marcador_proprio
+    out = "# [NEURON_1:python]\nx = 1\n# [NEURON_1:python]\ny = 2"
+    limpo = manter_apenas_marcador_proprio(out, "neuron_1")
+    assert marker_present(limpo, "neuron_1")
+
+
+def test_sem_alheios_fica_igual():
+    from agent.cortex import manter_apenas_marcador_proprio
+    out = "# [NEURON_4:rust]\nfn f() {}"
+    assert manter_apenas_marcador_proprio(out, "neuron_4") == out

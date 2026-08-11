@@ -87,9 +87,14 @@ class Neuron:
             # isto, um NEURON que respondesse "Aqui está: ```py ...```"
             # reprovava sempre por erro de sintaxe na sandbox. Marcadores
             # de erro internos não passam por aqui (só o ramo de sucesso).
-            from .cortex import limpar_codigo_modelo
+            from .cortex import (
+                limpar_codigo_modelo,
+                manter_apenas_marcador_proprio,
+            )
 
-            out = limpar_codigo_modelo(out)
+            out = manter_apenas_marcador_proprio(
+                limpar_codigo_modelo(out), self.neuron_id
+            )
         self.db.log_iteration(
             state["cycle_id"], state["iteration"], "2", self.neuron_id,
             input_summary=(improvement or "implementar secção")[:200],
